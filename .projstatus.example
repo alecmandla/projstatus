@@ -1,0 +1,27 @@
+# .projstatus — optional per-repo overrides for the `projstatus` dashboard.
+# Copy to your repo root as ".projstatus" and uncomment what you need.
+# Every setting is optional; anything left out is auto-detected. Plain shell assignments.
+
+# Header label (default: the repo's folder name, title-cased)
+# PROJECT_NAME="My Project"
+
+# Where project-*/milestone-* folders live (default: docs/tasks | tasks | planning/tasks)
+# TASKS_ROOT="docs/tasks"
+
+# The pointer line: a file containing `... Current pointer: ... \`milestone-slug\` ...`
+# (default file AGENTS.md, default pattern "Current pointer:").
+# Omit entirely to let "current" auto-resolve to the first unfinished milestone.
+# POINTER_FILE="AGENTS.md"
+# POINTER_PATTERN="Current pointer:"
+
+# Raw issue inbox file (default: docs/ISSUES_INBOX.md or ISSUES_INBOX.md)
+# INBOX="docs/ISSUES_INBOX.md"
+
+# Header regexes, if your IDs differ from the P<n>M<m>T<k> / GAP- / ISS- convention
+# TASK_RE='^## P[0-9]+M[0-9]+T[0-9]+:'
+# GAP_RE='^### GAP-'
+# ISS_RE='^### ISS-'
+
+# Display width cap, and the live-pane refresh interval in seconds
+# WIDTH_CAP=72
+# REFRESH=4
