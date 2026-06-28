@@ -31,7 +31,11 @@
 #   INBOX="docs/ISSUES_INBOX.md"   # raw issue inbox (auto-detected)
 #   TASK_RE='^## P[0-9]+M[0-9]+T[0-9]+:'   GAP_RE='^### GAP-'   ISS_RE='^### ISS-'
 #   WIDTH_CAP=72                   REFRESH=4
-# With no pointer line anywhere, "current" auto-resolves to the first milestone
+#   OUTER_PREFIX="project-"  INNER_PREFIX="milestone-"   # folder name prefixes (the two levels)
+#   OUTER_LABEL="Project"    INNER_LABEL="Milestone"      # what to call them in the UI
+#   OUTER_LETTER="P"         INNER_LETTER="M"             # selector/token letters (e.g. P2, P1M3)
+# e.g. a milestone→phase repo sets OUTER_*/INNER_* to milestone-/phase-, Milestone/Phase, M/P.
+# With no pointer line anywhere, "current" auto-resolves to the first inner level
 # that still has unfinished tasks.
 #
 set -uo pipefail
@@ -78,7 +82,22 @@ GAP_RE="${GAP_RE:-^### GAP-}"
 ISS_RE="${ISS_RE:-^### ISS-}"
 WIDTH_CAP="${WIDTH_CAP:-72}"
 REFRESH="${REFRESH:-4}"
+# Folder hierarchy naming. Defaults mirror the original project→milestone layout;
+# override in .projstatus for e.g. a milestone→phase repo (OUTER=milestone-, INNER=phase-).
+OUTER_PREFIX="${OUTER_PREFIX:-project-}"     # outer folder prefix (the grouping level)
+INNER_PREFIX="${INNER_PREFIX:-milestone-}"   # inner folder prefix (the level holding TASKS.md)
+OUTER_LABEL="${OUTER_LABEL:-Project}"        # display label for the outer level
+INNER_LABEL="${INNER_LABEL:-Milestone}"      # display label for the inner level
+OUTER_LETTER="${OUTER_LETTER:-P}"            # selector/token letter for the outer level
+INNER_LETTER="${INNER_LETTER:-M}"            # selector/token letter for the inner level
+OUTER_L="$(lc "$OUTER_LETTER")"; INNER_L="$(lc "$INNER_LETTER")"
 NAME_DISPLAY="$(uc "$PROJECT_NAME")"
+
+# --- slug parsing (honors the configured prefixes) ---------------------------
+outer_num()  { printf '%s' "$1" | sed -E "s/^${OUTER_PREFIX}([0-9]+)-.*/\1/"; }
+outer_name() { printf '%s' "$1" | sed -E "s/^${OUTER_PREFIX}[0-9]+-//; s/-/ /g"; }
+inner_num()  { printf '%s' "$1" | sed -E "s/^${INNER_PREFIX}([0-9]+)-.*/\1/"; }
+inner_name() { printf '%s' "$1" | sed -E "s/^${INNER_PREFIX}[0-9]+-//; s/-/ /g"; }
 
 GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .git)"
 [ -d "$GITDIR" ] && VIEW_FILE="$GITDIR/projstatus-view" || VIEW_FILE="$ROOT/.projstatus-view"
@@ -96,7 +115,7 @@ bar() {
 }
 
 # --- pointer + milestone ordering -------------------------------------------
-all_ms() { find "$TASKS_ROOT" -mindepth 2 -maxdepth 2 -type d -name 'milestone-*' 2>/dev/null | sort -V; }
+all_ms() { find "$TASKS_ROOT" -mindepth 2 -maxdepth 2 -type d -name "${INNER_PREFIX}*" 2>/dev/null | sort -V; }
 
 count_file() {
   local file="$1" hdr="$2" t dn
@@ -124,13 +143,13 @@ pointer_state() {
 
 dir_token() {
   local d="$1" pn mn
-  pn=$(printf '%s' "$d" | sed -E 's#.*/project-([0-9]+)-[^/]*/.*#\1#')
-  mn=$(printf '%s' "$(basename "$d")" | sed -E 's/^milestone-([0-9]+)-.*/\1/')
-  printf 'P%sM%s' "$pn" "$mn"
+  pn=$(outer_num "$(basename "$(dirname "$d")")")
+  mn=$(inner_num "$(basename "$d")")
+  printf '%s%s%s%s' "$OUTER_LETTER" "$pn" "$INNER_LETTER" "$mn"
 }
 slug_dir() { local s="$1"; ls -d "$TASKS_ROOT"/*/"$s" 2>/dev/null | head -1; }
-pnmn_dir() { local pn=$1 mn=$2; ls -d "$TASKS_ROOT"/project-"$pn"-*/milestone-"$mn"-* 2>/dev/null | head -1; }
-proj_dir() { local pn=$1; ls -d "$TASKS_ROOT"/project-"$pn"-* 2>/dev/null | head -1; }
+pnmn_dir() { local pn=$1 mn=$2; ls -d "$TASKS_ROOT"/"${OUTER_PREFIX}${pn}"-*/"${INNER_PREFIX}${mn}"-* 2>/dev/null | head -1; }
+proj_dir() { local pn=$1; ls -d "$TASKS_ROOT"/"${OUTER_PREFIX}${pn}"-* 2>/dev/null | head -1; }
 ms_index() { local target="$1" i=0 d; while IFS= read -r d; do i=$((i+1)); [ "$d" = "$target" ] && { printf '%s' "$i"; return; }; done < <(all_ms); printf '0'; }
 ms_at()    { all_ms | sed -n "${1}p"; }
 ms_count() { all_ms | wc -l | tr -d ' '; }
@@ -154,23 +173,23 @@ resolve() {
       d="$(ms_at "$idx")"
       [ -n "$d" ] && printf 'MS\t%s' "$d" || printf 'NONE\tno milestone there'; return ;;
   esac
-  if printf '%s' "$sel" | grep -qE '^p[0-9]+m[0-9]+$'; then
-    pn=$(printf '%s' "$sel" | sed -E 's/^p([0-9]+)m[0-9]+$/\1/'); mn=$(printf '%s' "$sel" | sed -E 's/^p[0-9]+m([0-9]+)$/\1/')
+  if printf '%s' "$sel" | grep -qE "^${OUTER_L}[0-9]+${INNER_L}[0-9]+$"; then
+    pn=$(printf '%s' "$sel" | sed -E "s/^${OUTER_L}([0-9]+)${INNER_L}[0-9]+$/\1/"); mn=$(printf '%s' "$sel" | sed -E "s/^${OUTER_L}[0-9]+${INNER_L}([0-9]+)$/\1/")
     d="$(pnmn_dir "$pn" "$mn")"
     if [ -n "$d" ]; then printf 'MS\t%s' "$d"
-    elif [ -n "$(proj_dir "$pn")" ]; then printf 'NONE\tP%sM%s has no TASKS.md (summary-only — try P%s)' "$pn" "$mn" "$pn"
-    else printf 'NONE\tno project %s' "$pn"; fi
+    elif [ -n "$(proj_dir "$pn")" ]; then printf 'NONE\t%s%s%s%s has no TASKS.md (summary-only — try %s%s)' "$OUTER_LETTER" "$pn" "$INNER_LETTER" "$mn" "$OUTER_LETTER" "$pn"
+    else printf 'NONE\tno %s %s' "$(lc "$OUTER_LABEL")" "$pn"; fi
     return
   fi
-  if printf '%s' "$sel" | grep -qE '^p[0-9]+$'; then
-    pn=$(printf '%s' "$sel" | sed -E 's/^p([0-9]+)$/\1/'); d="$(proj_dir "$pn")"
-    if [ -z "$d" ]; then printf 'NONE\tno project %s' "$pn"
-    elif [ -n "$(find "$d" -mindepth 1 -maxdepth 1 -type d -name 'milestone-*' 2>/dev/null | head -1)" ]; then printf 'PROJ\t%s' "$d"
+  if printf '%s' "$sel" | grep -qE "^${OUTER_L}[0-9]+$"; then
+    pn=$(printf '%s' "$sel" | sed -E "s/^${OUTER_L}([0-9]+)$/\1/"); d="$(proj_dir "$pn")"
+    if [ -z "$d" ]; then printf 'NONE\tno %s %s' "$(lc "$OUTER_LABEL")" "$pn"
+    elif [ -n "$(find "$d" -mindepth 1 -maxdepth 1 -type d -name "${INNER_PREFIX}*" 2>/dev/null | head -1)" ]; then printf 'PROJ\t%s' "$d"
     else printf 'SUMMARY\t%s' "$d"; fi
     return
   fi
-  if printf '%s' "$sel" | grep -qE '^milestone-'; then
-    d="$(slug_dir "$1")"; [ -n "$d" ] && printf 'MS\t%s' "$d" || printf 'NONE\tno milestone %s' "$1"; return
+  if printf '%s' "$sel" | grep -qE "^${INNER_PREFIX}"; then
+    d="$(slug_dir "$1")"; [ -n "$d" ] && printf 'MS\t%s' "$d" || printf 'NONE\tno %s %s' "$(lc "$INNER_LABEL")" "$1"; return
   fi
   printf 'NONE\tunknown selector: %s' "$1"
 }
@@ -182,7 +201,7 @@ write_view() {
   [ "$kind" = "NONE" ] && return 1
   case "$kind" in
     MS) tok="$(dir_token "$arg")" ;;
-    PROJ|SUMMARY) tok="P$(basename "$arg" | sed -E 's/^project-([0-9]+)-.*/\1/')" ;;
+    PROJ|SUMMARY) tok="${OUTER_LETTER}$(outer_num "$(basename "$arg")")" ;;
     LIST) tok="ls" ;;
     *) tok="$sel" ;;
   esac
@@ -237,7 +256,7 @@ nav_hint() {
     echo ""
     echo "  ${d}keys${r}  ${k}n${r}${d} next  ${k}p${r}${d} prev  ${k}c${r}${d} live  ${k}a${r}${d} all  ${k}g${r}${d} go to  ${k}q${r}${d} quit${r}"
   else
-    printf '  %s↹ run:  projstatus <P0M1|P2|next>   ·   projstatus view <sel> moves the pane%s\n' "$DIM" "$RST"
+    printf '  %s↹ run:  projstatus <%s0%s1|%s2|next>   ·   projstatus view <sel> moves the pane%s\n' "$DIM" "$OUTER_LETTER" "$INNER_LETTER" "$OUTER_LETTER" "$RST"
   fi
 }
 
@@ -258,10 +277,10 @@ render_milestone() {
   local dir="$1" cols; cols=$(cols_now)
   local slug pslug pnum pname mnum mname tasks gaps issues
   slug="$(basename "$dir")"; pslug="$(basename "$(dirname "$dir")")"
-  pnum=$(printf '%s' "$pslug" | sed -E 's/^project-([0-9]+)-.*/\1/')
-  pname=$(printf '%s' "$pslug" | sed -E 's/^project-[0-9]+-//; s/-/ /g' | titlecase)
-  mnum=$(printf '%s' "$slug" | sed -E 's/^milestone-([0-9]+)-.*/\1/')
-  mname=$(printf '%s' "$slug" | sed -E 's/^milestone-[0-9]+-//; s/-/ /g')
+  pnum=$(outer_num "$pslug")
+  pname=$(outer_name "$pslug" | titlecase)
+  mnum=$(inner_num "$slug")
+  mname=$(inner_name "$slug")
   tasks="$dir/TASKS.md"; gaps="$dir/GAPS.md"; issues="$dir/ISSUES.md"
 
   local ptr_dir ptr_idx my_idx rel ptok
@@ -271,8 +290,8 @@ render_milestone() {
   elif [ "$my_idx" -lt "$ptr_idx" ]; then rel="↩ past milestone"
   else rel="↪ upcoming milestone"; fi
 
-  printf '  %sProject %s%s · %s\n' "$BOLD" "$pnum" "$RST" "$pname"
-  printf '  %sMilestone %s%s — %s%s%s\n' "$BOLD" "$mnum" "$RST" "$MAG" "$mname" "$RST"
+  printf '  %s%s %s%s · %s\n' "$BOLD" "$OUTER_LABEL" "$pnum" "$RST" "$pname"
+  printf '  %s%s %s%s — %s%s%s\n' "$BOLD" "$INNER_LABEL" "$mnum" "$RST" "$MAG" "$mname" "$RST"
   printf '  %s%s%s\n\n' "$DIM" "$rel" "$RST"
 
   if [ -f "$tasks" ]; then
@@ -294,7 +313,7 @@ render_milestone() {
   local pd pt
   pd=$(grep -hcE "$STATUS_DONE" "$(dirname "$dir")"/*/TASKS.md 2>/dev/null | awk '{s+=$1}END{print s+0}')
   pt=$(grep -hcE "$TASK_RE" "$(dirname "$dir")"/*/TASKS.md 2>/dev/null | awk '{s+=$1}END{print s+0}')
-  printf '\n  %sProject %s%s  %s%s%s  %s/%s tasks\n' "$BOLD" "$pnum" "$RST" "$GRN" "$(bar "$pd" "$pt" 16)" "$RST" "$pd" "$pt"
+  printf '\n  %s%s %s%s  %s%s%s  %s/%s tasks\n' "$BOLD" "$OUTER_LABEL" "$pnum" "$RST" "$GRN" "$(bar "$pd" "$pt" 16)" "$RST" "$pd" "$pt"
 
   render_inbox_line
   footer_nav "$(dir_token "$dir")" "$ptok"
@@ -303,39 +322,39 @@ render_milestone() {
 render_project() {
   local pdir="$1" cols; cols=$(cols_now)
   local pslug pnum pname; pslug="$(basename "$pdir")"
-  pnum=$(printf '%s' "$pslug" | sed -E 's/^project-([0-9]+)-.*/\1/')
-  pname=$(printf '%s' "$pslug" | sed -E 's/^project-[0-9]+-//; s/-/ /g' | titlecase)
+  pnum=$(outer_num "$pslug")
+  pname=$(outer_name "$pslug" | titlecase)
   local ptr_dir; ptr_dir="$(slug_dir "$(pointer_slug)")"
-  printf '  %sProject %s · %s%s\n' "$BOLD" "$pnum" "$pname" "$RST"; rule $(( cols - 2 ))
+  printf '  %s%s %s · %s%s\n' "$BOLD" "$OUTER_LABEL" "$pnum" "$pname" "$RST"; rule $(( cols - 2 ))
   local d slug mnum mname mk
   while IFS= read -r d; do
     [ -z "$d" ] && continue
-    slug="$(basename "$d")"; mnum=$(printf '%s' "$slug" | sed -E 's/^milestone-([0-9]+)-.*/\1/')
-    mname=$(printf '%s' "$slug" | sed -E 's/^milestone-[0-9]+-//; s/-/ /g')
+    slug="$(basename "$d")"; mnum=$(inner_num "$slug")
+    mname=$(inner_name "$slug")
     set -- $(count_file "$d/TASKS.md" "$TASK_RE"); local md=$1 mt=$2
     local go=0; if [ -f "$d/GAPS.md" ]; then set -- $(count_file "$d/GAPS.md" "$GAP_RE"); go=$(( $2 - $1 )); fi
     if [ "$d" = "$ptr_dir" ]; then mk="${CYN}▸${RST}"; elif [ "$md" = "$mt" ] && [ "$mt" -gt 0 ]; then mk="${GRN}✓${RST}"; else mk="${DIM}·${RST}"; fi
-    printf '  %s M%s %-22s %s%s%s %s%s/%s%s' "$mk" "$mnum" "$(printf '%s' "$mname" | cut -c1-22)" "$GRN" "$(bar "$md" "$mt" 8)" "$RST" "$DIM" "$md" "$mt" "$RST"
+    printf '  %s %s%s %-22s %s%s%s %s%s/%s%s' "$mk" "$INNER_LETTER" "$mnum" "$(printf '%s' "$mname" | cut -c1-22)" "$GRN" "$(bar "$md" "$mt" 8)" "$RST" "$DIM" "$md" "$mt" "$RST"
     [ "$go" -gt 0 ] && printf ' %s+%sg%s' "$YEL" "$go" "$RST"
     printf '\n'
-  done < <(find "$pdir" -mindepth 1 -maxdepth 1 -type d -name 'milestone-*' | sort -V)
+  done < <(find "$pdir" -mindepth 1 -maxdepth 1 -type d -name "${INNER_PREFIX}*" | sort -V)
   render_inbox_line
-  footer_nav "P$pnum" "$(dir_token "$ptr_dir")"
+  footer_nav "${OUTER_LETTER}$pnum" "$(dir_token "$ptr_dir")"
 }
 
 render_summary() {
   local pdir="$1" cols; cols=$(cols_now)
   local pslug pnum pname; pslug="$(basename "$pdir")"
-  pnum=$(printf '%s' "$pslug" | sed -E 's/^project-([0-9]+)-.*/\1/')
-  pname=$(printf '%s' "$pslug" | sed -E 's/^project-[0-9]+-//; s/-/ /g' | titlecase)
-  printf '  %sProject %s · %s%s  %s(summary only)%s\n' "$BOLD" "$pnum" "$pname" "$RST" "$DIM" "$RST"; rule $(( cols - 2 ))
+  pnum=$(outer_num "$pslug")
+  pname=$(outer_name "$pslug" | titlecase)
+  printf '  %s%s %s · %s%s  %s(summary only)%s\n' "$BOLD" "$OUTER_LABEL" "$pnum" "$pname" "$RST" "$DIM" "$RST"; rule $(( cols - 2 ))
   if [ -f "$pdir/SUMMARY.md" ]; then
     grep -E '^- ' "$pdir/SUMMARY.md" | sed -E "s/^- /  ${DIM}·${RST} /" | cut -c1-$(( cols + 12 ))
   else
     printf '  %sno SUMMARY.md%s\n' "$DIM" "$RST"
   fi
   printf '\n  %sNot yet expanded into TASKS.md%s\n' "$DIM" "$RST"
-  footer_nav "P$pnum" "$(dir_token "$(slug_dir "$(pointer_slug)")")"
+  footer_nav "${OUTER_LETTER}$pnum" "$(dir_token "$(slug_dir "$(pointer_slug)")")"
 }
 
 render_list() {
@@ -344,26 +363,26 @@ render_list() {
   local pdir pslug pnum pname d slug mnum mname mk md mt nms
   while IFS= read -r pdir; do
     pslug="$(basename "$pdir")"
-    pnum=$(printf '%s' "$pslug" | sed -E 's/^project-([0-9]+)-.*/\1/')
-    pname=$(printf '%s' "$pslug" | sed -E 's/^project-[0-9]+-//; s/-/ /g' | titlecase)
-    nms="$(find "$pdir" -mindepth 1 -maxdepth 1 -type d -name 'milestone-*' 2>/dev/null | wc -l | tr -d ' ')"
+    pnum=$(outer_num "$pslug")
+    pname=$(outer_name "$pslug" | titlecase)
+    nms="$(find "$pdir" -mindepth 1 -maxdepth 1 -type d -name "${INNER_PREFIX}*" 2>/dev/null | wc -l | tr -d ' ')"
     if [ "$nms" -gt 0 ]; then
       local ppd ppt
       ppd=$(grep -hcE "$STATUS_DONE" "$pdir"/*/TASKS.md 2>/dev/null | awk '{s+=$1}END{print s+0}')
       ppt=$(grep -hcE "$TASK_RE" "$pdir"/*/TASKS.md 2>/dev/null | awk '{s+=$1}END{print s+0}')
-      printf '\n  %sP%s · %s%s  %s%s/%s%s\n' "$BOLD" "$pnum" "$pname" "$RST" "$DIM" "$ppd" "$ppt" "$RST"
+      printf '\n  %s%s%s · %s%s  %s%s/%s%s\n' "$BOLD" "$OUTER_LETTER" "$pnum" "$pname" "$RST" "$DIM" "$ppd" "$ppt" "$RST"
       while IFS= read -r d; do
         [ -z "$d" ] && continue
-        slug="$(basename "$d")"; mnum=$(printf '%s' "$slug" | sed -E 's/^milestone-([0-9]+)-.*/\1/')
-        mname=$(printf '%s' "$slug" | sed -E 's/^milestone-[0-9]+-//; s/-/ /g')
+        slug="$(basename "$d")"; mnum=$(inner_num "$slug")
+        mname=$(inner_name "$slug")
         set -- $(count_file "$d/TASKS.md" "$TASK_RE"); md=$1; mt=$2
         if [ "$d" = "$ptr_dir" ]; then mk="${CYN}▸${RST}"; elif [ "$md" = "$mt" ] && [ "$mt" -gt 0 ]; then mk="${GRN}✓${RST}"; else mk="${DIM}·${RST}"; fi
-        printf '    %s M%s %-20s %s%s%s %s%s/%s%s\n' "$mk" "$mnum" "$(printf '%s' "$mname" | cut -c1-20)" "$GRN" "$(bar "$md" "$mt" 6)" "$RST" "$DIM" "$md" "$mt" "$RST"
-      done < <(find "$pdir" -mindepth 1 -maxdepth 1 -type d -name 'milestone-*' | sort -V)
+        printf '    %s %s%s %-20s %s%s%s %s%s/%s%s\n' "$mk" "$INNER_LETTER" "$mnum" "$(printf '%s' "$mname" | cut -c1-20)" "$GRN" "$(bar "$md" "$mt" 6)" "$RST" "$DIM" "$md" "$mt" "$RST"
+      done < <(find "$pdir" -mindepth 1 -maxdepth 1 -type d -name "${INNER_PREFIX}*" | sort -V)
     else
-      printf '\n  %sP%s · %s%s  %s— summary only%s\n' "$BOLD" "$pnum" "$pname" "$RST" "$DIM" "$RST"
+      printf '\n  %s%s%s · %s%s  %s— summary only%s\n' "$BOLD" "$OUTER_LETTER" "$pnum" "$pname" "$RST" "$DIM" "$RST"
     fi
-  done < <(find "$TASKS_ROOT" -mindepth 1 -maxdepth 1 -type d -name 'project-*' | sort -V)
+  done < <(find "$TASKS_ROOT" -mindepth 1 -maxdepth 1 -type d -name "${OUTER_PREFIX}*" | sort -V)
   render_inbox_line
   printf '\n'; nav_hint
 }
@@ -440,7 +459,7 @@ case "${1:-}" in
           handle_key "$key"; rc=$?
           if [ "$rc" = 2 ]; then clear_screen; printf '  projstatus closed.  restart:  projstatus --watch\n'; exit 0; fi
           if [ "$rc" = 3 ]; then
-            printf '\n  %sgo to%s (e.g. P2, P1M3, pointer) — then Enter: ' "$BOLD" "$RST"
+            printf '\n  %sgo to%s (e.g. %s2, %s1%s3, pointer) — then Enter: ' "$BOLD" "$RST" "$OUTER_LETTER" "$OUTER_LETTER" "$INNER_LETTER"
             IFS= read -r sel || sel=""
             [ -n "$sel" ] && { write_view "$sel" || true; }
           fi
