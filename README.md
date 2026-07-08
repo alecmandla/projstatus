@@ -1,10 +1,8 @@
 # projstatus
 
-A live, interactive terminal dashboard for repos that keep their plan as **markdown
-task files on disk**, in a Linear-style hierarchy. Shows where you are, what's done,
-what's left — tasks, gaps, and issues — and follows you as you work. Built to live in
-a side pane. One file, zero dependencies beyond bash/awk/sed/grep/git, runs on stock
-macOS bash 3.2.
+A live "where am I" dashboard for any repo that keeps its plan in markdown files.
+One bash script, zero dependencies beyond the tools already on your machine
+(bash/awk/sed/grep/git), runs on the stock macOS shell.
 
 ```
   MYPROJECT ▸ status                          14:09:29
@@ -22,38 +20,47 @@ macOS bash 3.2.
   ○ GAP-P0M2-3  [High] Add an .easignore
 ```
 
-## The hierarchy (Linear-style)
+The idea: your plan is just folders and markdown — readable in any editor,
+reviewable in pull requests, and easy for AI coding agents to read and update.
+projstatus turns those files into a live dashboard: what's done, what's open,
+what's next. Nothing to sync, no service, no database — the markdown *is* the
+source of truth.
 
-projstatus models the same shape Linear does — pick whatever ordered subset your
-repo needs (2–5 levels):
-
-| Linear | on disk | example |
-|----|----|----|
-| Initiative | a folder level `initiative-<n>-<slug>/` | `initiative-0-platform/` |
-| Project | a folder level `project-<n>-<slug>/` | `project-1-core-loop/` |
-| Milestone | a folder level `milestone-<n>-<slug>/` | `milestone-2-catalog/` |
-| Issue | a `## <ID>: Title` header in `TASKS.md` | `## P1M2T3: Build the list` |
-| Sub-issue | a `- [ ]` / `- [x]` checklist line inside the issue's section | acceptance criteria |
-
-Folders are the levels above the leaf (1–4 of them); the innermost folder holds
-`TASKS.md` (plus optional `GAPS.md` / `ISSUES.md`). **Depth and naming are
-auto-detected** from the folder tree, and each level's selector letter comes from its
-prefix — so a `project-*/milestone-*` repo answers to `P0M1`, and an
-`initiative-*/project-*/milestone-*` repo answers to `I0P1M2`. Partial selectors
-(`P0`, `I0P1`) open overviews at that level.
-
-## Install
+## Quick start
 
 ```sh
 git clone https://github.com/alecmandla/projstatus
 ln -sf "$PWD/projstatus/projstatus" /usr/local/bin/projstatus   # any dir on your PATH
 ```
 
+Then run `projstatus` inside any repo that has the layout. No plan yet? Scaffold
+a tiny one and watch it light up:
+
+```sh
+mkdir -p docs/tasks/project-0-mvp/milestone-0-first-steps
+cat > docs/tasks/project-0-mvp/milestone-0-first-steps/TASKS.md <<'EOF'
+# Milestone 0 — First Steps
+
+## P0M0T0: Sketch what the app should do
+
+- **Status:** `[ ] TODO`
+
+## P0M0T1: Build the smallest working version
+
+- **Status:** `[ ] TODO`
+  - [ ] happy path works
+  - [ ] a friend can run it
+EOF
+projstatus
+```
+
+That's the whole convention: **folders are levels, `## ID: Title` headers are
+tasks, statuses are checkboxes.** Mark work done by editing the markdown
+(`[ ]` → `[x]`) — by hand or by your coding agent — and the dashboard follows.
+
 Later, `projstatus update` fast-forwards the checkout the command runs from.
 
 ## Use
-
-Run it inside any repo with the hierarchy:
 
 ```sh
 projstatus              # the current leaf (the pointer), once
@@ -109,7 +116,7 @@ file: docs/tasks/project-1-core-loop/milestone-1-capture/TASKS.md
 If the pointer's leaf is complete, it says so (`note: …`) and hops to the first open
 task anywhere in the tree.
 
-## What it reads (the convention)
+## The convention, in full
 
 ```
 <tasks-root>/<level>-<n>-<slug>/…/TASKS.md    ← 1–4 folder levels
@@ -118,7 +125,7 @@ task anywhere in the tree.
 ```
 
 - **Tasks** — `## <ID>: Title` headers, each with `- **Status:** \`[x] DONE\`` or `\`[ ] TODO\``.
-- **Sub-issues** — `- [ ]` / `- [x]` checklist lines inside a task's section; open
+- **Sub-tasks** — `- [ ]` / `- [x]` checklist lines inside a task's section; open
   tasks show a `done/total` suffix.
 - **Gaps** — `### GAP-… : Title` + `**Status:**` + `**Severity:**`.
 - **Issues** — `### ISS-… : Title` + `**Status:**` + `**Priority:**`.
@@ -127,15 +134,30 @@ task anywhere in the tree.
   to the first leaf that still has unfinished tasks. The pointer may name any level;
   a group pointer descends to its first unfinished leaf.
 
+The hierarchy is the same shape Linear uses — take whatever ordered subset your
+project needs (2–5 levels):
+
+| Linear | on disk | example |
+|----|----|----|
+| Initiative | a folder level `initiative-<n>-<slug>/` | `initiative-0-platform/` |
+| Project | a folder level `project-<n>-<slug>/` | `project-1-core-loop/` |
+| Milestone | a folder level `milestone-<m>-<slug>/` | `milestone-2-catalog/` |
+| Issue | a `## <ID>: Title` header in `TASKS.md` | `## P1M2T3: Build the list` |
+| Sub-issue | a checklist line inside the issue's section | acceptance criteria |
+
+**Depth and naming are auto-detected** from the folder tree, and each level's
+selector letter comes from its prefix — a `project-*/milestone-*` repo answers to
+`P0M1`, an `initiative-*/project-*/milestone-*` repo to `I0P1M2`, and the level
+words (`projstatus milestone`) come from your own folder names.
+
 Task IDs double nicely as branch/worktree names (`claude/p1m2t3`): keep level
 letters distinct and IDs will always lowercase into filesystem- and branch-safe
 tokens.
 
 ## Adapting it to a repo
 
-Everything is auto-detected — depth, prefixes, labels, and letters come from the
-folder tree, so most repos need **nothing**. For anything different, drop a
-`.projstatus` file at the repo root (plain `KEY="value"` lines) — see
+Everything is auto-detected, so most repos need **nothing**. For anything different,
+drop a `.projstatus` file at the repo root (plain `KEY="value"` lines) — see
 [`.projstatus.example`](.projstatus.example). All keys are optional:
 
 | key | default |
