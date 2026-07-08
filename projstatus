@@ -190,13 +190,18 @@ sel_example() {  # a plausible selector, e.g. P0M1 / I0P1M2
 slug_num()  { printf '%s' "$2" | sed -E "s/^$(pfx "$1")([0-9]+)-.*/\1/"; }
 slug_name() { printf '%s' "$2" | sed -E "s/^$(pfx "$1")[0-9]+-//; s/-/ /g"; }
 
+# env overrides — PROJSTATUS_*; the historical MNEMO_* names still work
+PROJSTATUS_COLS="${PROJSTATUS_COLS:-${MNEMO_COLS:-}}"
+PROJSTATUS_NO_CLEAR="${PROJSTATUS_NO_CLEAR:-${MNEMO_NO_CLEAR:-}}"
+PROJSTATUS_FORCE_TTY="${PROJSTATUS_FORCE_TTY:-${MNEMO_FORCE_TTY:-}}"
+
 GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .git)"
 [ -d "$GITDIR" ] && VIEW_FILE="$GITDIR/projstatus-view" || VIEW_FILE="$ROOT/.projstatus-view"
 PANE=0   # set to 1 in --watch so footers show key hints instead of command hints
 STATUS_DONE='^[[:space:]]*-[[:space:]]*\*\*Status:\*\*[[:space:]]*`\[x\]'
 
 rule()      { printf '%s%s%s\n' "$DIM" "$(printf '─%.0s' $(seq 1 "$1"))" "$RST"; }
-cols_now()  { local c="${MNEMO_COLS:-}"; [ -z "$c" ] && c=$(tput cols 2>/dev/null || echo 56); [ "$c" -gt "$WIDTH_CAP" ] && c="$WIDTH_CAP"; printf '%s' "$c"; }
+cols_now()  { local c="${PROJSTATUS_COLS:-}"; [ -z "$c" ] && c=$(tput cols 2>/dev/null || echo 56); [ "$c" -gt "$WIDTH_CAP" ] && c="$WIDTH_CAP"; printf '%s' "$c"; }
 
 bar() {
   local d=$1 t=$2 w=$3 f i out=""
@@ -621,15 +626,15 @@ case "${1:-}" in
   --watch|-w)
     PANE=1; interval="$REFRESH"
     do_render() {
-      MNEMO_COLS=$(tput cols 2>/dev/null || echo 56)
+      PROJSTATUS_COLS=$(tput cols 2>/dev/null || echo 56)
       local frame; frame="$(render_dispatch "$(current_view)")"
-      if [ "${MNEMO_NO_CLEAR:-}" = 1 ]; then echo "----------------- (refresh) -----------------"; printf '%s\n' "$frame"; return; fi
+      if [ "${PROJSTATUS_NO_CLEAR:-}" = 1 ]; then echo "----------------- (refresh) -----------------"; printf '%s\n' "$frame"; return; fi
       local body; body="$(printf '%s\n' "$frame" | sed $'s/$/\033[K/')"
       printf '%s' $'\033[?25l\033[H'"$body"$'\033[J\033[?25h'
     }
     printf '\033[2J\033[H'
     do_render
-    if [ -t 0 ] || [ "${MNEMO_FORCE_TTY:-}" = 1 ]; then
+    if [ -t 0 ] || [ "${PROJSTATUS_FORCE_TTY:-}" = 1 ]; then
       while true; do
         if IFS= read -r -s -n 1 -t "$interval" key; then
           [ "$key" = $'\033' ] && { IFS= read -r -s -n 2 -t 1 _ 2>/dev/null; do_render; continue; }
@@ -644,7 +649,7 @@ case "${1:-}" in
         else
           rc=$?
           if [ "$rc" -gt 128 ]; then do_render
-          elif [ "${MNEMO_FORCE_TTY:-}" = 1 ]; then break
+          elif [ "${PROJSTATUS_FORCE_TTY:-}" = 1 ]; then break
           else sleep "$interval"; do_render; fi
         fi
       done
