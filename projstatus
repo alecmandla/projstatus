@@ -28,6 +28,8 @@
 #   projstatus pane            open the live pane in a Supacode split (if inside Supacode)
 #   projstatus view <sel>      retarget a running pane from another shell
 #                              (also: view next / view prev step the pane)
+#   projstatus version         print the version (aliases: --version, -v)
+#   projstatus update          git-pull the checkout this command runs from
 #   projstatus help            this help
 #
 # In the live pane, click it to focus, then press:
@@ -53,6 +55,8 @@
 # that still has unfinished tasks.
 #
 set -uo pipefail
+
+VERSION="1.0.0"
 
 # --- locate the project root (the git repo we're standing in) ----------------
 find_root() {
@@ -695,9 +699,44 @@ usage() {
   awk 'NR>2 && !/^#/ {exit} NR>2 {sub(/^# ?/,""); print}' "$0"
 }
 
+self_repo() {  # the checkout this command runs from (follows the install symlink)
+  local self="$0" dir
+  while [ -L "$self" ]; do
+    dir="$(cd "$(dirname "$self")" && pwd)"
+    self="$(readlink "$self")"
+    case "$self" in /*) ;; *) self="$dir/$self" ;; esac
+  done
+  ( cd "$(dirname "$self")" && git rev-parse --show-toplevel 2>/dev/null )
+}
+
+cmd_update() {
+  local repo before after
+  repo="$(self_repo)"
+  if [ -z "$repo" ]; then
+    printf 'projstatus was not installed from a git checkout — reinstall with:\n'
+    printf '  git clone https://github.com/alecmandla/projstatus\n'
+    exit 1
+  fi
+  before="$(git -C "$repo" rev-parse --short HEAD)"
+  if ! git -C "$repo" pull --ff-only; then
+    printf '⚠ could not fast-forward %s — update it by hand\n' "$repo"
+    exit 1
+  fi
+  after="$(git -C "$repo" rev-parse --short HEAD)"
+  if [ "$before" = "$after" ]; then
+    printf 'projstatus %s — already up to date (%s)\n' "$VERSION" "$repo"
+  else
+    printf 'updated %s → %s:\n' "$before" "$after"
+    git -C "$repo" log --oneline "${before}..${after}" | sed 's/^/  /'
+    printf 'now: projstatus %s\n' "$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "$repo/projstatus")"
+  fi
+}
+
 # =============================== main ========================================
 case "${1:-}" in
   help|--help|-h) usage ;;
+  version|--version|-v) printf 'projstatus %s\n' "$VERSION" ;;
+  update) cmd_update ;;
   now) cmd_now ;;
   next|prev)
     printf '%s moves the live pane — use:  projstatus view %s   (or press n/p in the pane)\n' "$1" "$1"

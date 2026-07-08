@@ -57,6 +57,8 @@ want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 # --- syntax: parses under bash 3.2 -------------------------------------------
 if want syntax; then
   if "$BASH_BIN" -n "$SCRIPT"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); echo "FAIL: bash -n" >&2; fi
+  out="$("$BASH_BIN" "$SCRIPT" --version)"
+  assert_contains "version flag" "$out" "projstatus 1."
 fi
 
 # --- depth3: the classic project → milestone → task layout, zero config ------

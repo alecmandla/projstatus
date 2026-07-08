@@ -49,6 +49,8 @@ git clone https://github.com/alecmandla/projstatus
 ln -sf "$PWD/projstatus/projstatus" /usr/local/bin/projstatus   # any dir on your PATH
 ```
 
+Later, `projstatus update` fast-forwards the checkout the command runs from.
+
 ## Use
 
 Run it inside any repo with the hierarchy:
@@ -67,6 +69,8 @@ projstatus watch        # the live, interactive pane (aliases: --watch, -w)
 projstatus pane         # open the live pane in a Supacode split
 projstatus view <sel>   # retarget a running pane from another shell
                         #   (also: view next / view prev step the pane)
+projstatus version      # print the version
+projstatus update       # pull the latest (git checkout installs)
 ```
 
 There are two ways to look at a repo: **pick a node** (`P0M1` — a specific place)
