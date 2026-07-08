@@ -465,7 +465,7 @@ nav_hint() {
     echo ""
     echo "  ${d}keys${r}  ${k}n${r}${d} next  ${k}p${r}${d} prev  ${k}c${r}${d} live  ${k}a${r}${d} all  ${k}1-$((NLEV+1))${r}${d} altitude  ${k}g${r}${d} go to  ${k}q${r}${d} quit${r}"
   else
-    printf '  %s↹ run:  projstatus <%s|-2|all>   ·   projstatus view <sel> moves the pane%s\n' "$DIM" "$(sel_example)" "$RST"
+    printf '  %s» run:  projstatus <%s|-2|all>   ·   projstatus view <sel> moves the pane%s\n' "$DIM" "$(sel_example)" "$RST"
   fi
 }
 
