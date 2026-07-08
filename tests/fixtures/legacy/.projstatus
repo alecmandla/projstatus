@@ -1,0 +1,10 @@
+# Legacy two-level config using the pre-HIERARCHY keys (kept working forever).
+PROJECT_NAME="Whichclone"
+TASKS_ROOT="docs"
+OUTER_PREFIX="milestone-"
+INNER_PREFIX="phase-"
+OUTER_LABEL="Milestone"
+INNER_LABEL="Phase"
+OUTER_LETTER="M"
+INNER_LETTER="P"
+TASK_RE='^## M[0-9]+P[0-9]+T[0-9]+:'
