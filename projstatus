@@ -1,41 +1,48 @@
 #!/usr/bin/env bash
 #
-# projstatus — a live, interactive "where am I" dashboard for repos that use a
-# project → milestone → task hierarchy (the kind that mirrors Linear).
+# projstatus — a live, interactive "where am I" dashboard for repos that keep
+# their plan as markdown task files on disk, in a Linear-style hierarchy
+# (Initiative > Project > Milestone > Issue) of 1–4 folder levels plus a leaf:
 #
-# It reads, from the current git repo:
-#   <tasks-root>/project-<n>-<slug>/milestone-<m>-<slug>/TASKS.md   (## <ID>: Title + **Status:** `[x]/[ ]`)
-#                                                        /GAPS.md    (### GAP-… structured gaps)
-#                                                        /ISSUES.md  (### ISS-… structured issues)
-# plus an optional "Current pointer:" line and an optional issue inbox.
+#   <tasks-root>/<level1>/<level2>/…/TASKS.md   (## <ID>: Title + **Status:** `[x]/[ ]`)
+#                                   /GAPS.md    (### GAP-… structured gaps)
+#                                   /ISSUES.md  (### ISS-… structured issues)
+#
+# Folder names are `<prefix><n>-<slug>` (e.g. project-0-foundations). The depth
+# and prefixes are auto-detected; selectors compose from the levels' letters
+# (P0M1 for project-*/milestone-*, I0P1M2 for a 3-folder-level repo, …).
 #
 # USAGE
-#   projstatus                 the current milestone (the pointer), once
-#   projstatus P0M1            peek at any milestone
-#   projstatus P2              a project overview (or its outline)
-#   projstatus ls              every project + milestone at a glance
+#   projstatus                 the current leaf (the pointer), once
+#   projstatus P0M1            peek at any level: full tokens reach a leaf …
+#   projstatus P2              … partial tokens show that level's overview
+#   projstatus ls              the whole tree at a glance
+#   projstatus prev            the leaf before the current view
 #   projstatus --watch         the live, interactive pane
 #   projstatus pane            open the live pane in a Supacode split (if inside Supacode)
 #   projstatus view <sel>      retarget a running pane from another shell
 #   projstatus help            this help
 #
 # In the live pane, click it to focus, then press:
-#   n next · p prev · c live pointer · a all projects · g go to · r refresh · q quit
+#   n next · p prev · c live pointer · a all · g go to · r refresh · q quit
 #
 # ADAPTING IT — drop an optional ".projstatus" file at a repo's root to override
 # any of these (all have sensible auto-detected defaults):
 #   PROJECT_NAME="My Project"      # header label   (default: the repo folder name)
-#   TASKS_ROOT="docs/tasks"        # where project-*/milestone-* live (auto: docs/tasks|tasks|planning/tasks)
+#   TASKS_ROOT="docs/tasks"        # where the level folders live (auto: docs/tasks|tasks|planning/tasks)
+#   HIERARCHY="project-:Project:P milestone-:Milestone:M"
+#       # ordered outermost→leaf-parent; each level is <folder-prefix>[:<Label>[:<Letter>]]
+#       # (label/letter are derived from the prefix when omitted); an optional
+#       # @<file>[:<Label>[:<Letter>]] entry names the leaf (default @TASKS.md:Task:T)
 #   POINTER_FILE="AGENTS.md"       # file holding the pointer line
 #   POINTER_PATTERN="Current pointer:"
 #   INBOX="docs/ISSUES_INBOX.md"   # raw issue inbox (auto-detected)
 #   TASK_RE='^## P[0-9]+M[0-9]+T[0-9]+:'   GAP_RE='^### GAP-'   ISS_RE='^### ISS-'
+#       # TASK_RE's default is derived from the hierarchy's letters
 #   WIDTH_CAP=72                   REFRESH=4
-#   OUTER_PREFIX="project-"  INNER_PREFIX="milestone-"   # folder name prefixes (the two levels)
-#   OUTER_LABEL="Project"    INNER_LABEL="Milestone"      # what to call them in the UI
-#   OUTER_LETTER="P"         INNER_LETTER="M"             # selector/token letters (e.g. P2, P1M3)
-# e.g. a milestone→phase repo sets OUTER_*/INNER_* to milestone-/phase-, Milestone/Phase, M/P.
-# With no pointer line anywhere, "current" auto-resolves to the first inner level
+# The pre-HIERARCHY two-level keys (OUTER_PREFIX/INNER_PREFIX, OUTER_LABEL/…,
+# OUTER_LETTER/…) still work and imply a two-level hierarchy.
+# With no pointer line anywhere, "current" auto-resolves to the first leaf
 # that still has unfinished tasks.
 #
 set -uo pipefail
@@ -77,27 +84,111 @@ if [ -z "${INBOX:-}" ]; then
   for c in docs/ISSUES_INBOX.md ISSUES_INBOX.md docs/ISSUES.md; do [ -f "$ROOT/$c" ] && { INBOX="$c"; break; }; done
 fi
 INBOX="${INBOX:-docs/ISSUES_INBOX.md}"
-TASK_RE="${TASK_RE:-^## P[0-9]+M[0-9]+T[0-9]+:}"
 GAP_RE="${GAP_RE:-^### GAP-}"
 ISS_RE="${ISS_RE:-^### ISS-}"
 WIDTH_CAP="${WIDTH_CAP:-72}"
 REFRESH="${REFRESH:-4}"
-# Folder hierarchy naming. Defaults mirror the original project→milestone layout;
-# override in .projstatus for e.g. a milestone→phase repo (OUTER=milestone-, INNER=phase-).
-OUTER_PREFIX="${OUTER_PREFIX:-project-}"     # outer folder prefix (the grouping level)
-INNER_PREFIX="${INNER_PREFIX:-milestone-}"   # inner folder prefix (the level holding TASKS.md)
-OUTER_LABEL="${OUTER_LABEL:-Project}"        # display label for the outer level
-INNER_LABEL="${INNER_LABEL:-Milestone}"      # display label for the inner level
-OUTER_LETTER="${OUTER_LETTER:-P}"            # selector/token letter for the outer level
-INNER_LETTER="${INNER_LETTER:-M}"            # selector/token letter for the inner level
-OUTER_L="$(lc "$OUTER_LETTER")"; INNER_L="$(lc "$INNER_LETTER")"
+
+# --- the hierarchy: 1–4 folder levels + a leaf (task headers in TASKS.md) ----
+# Level i lives in PFX_i / LBL_i / LTR_i (bash 3.2: no associative arrays).
+# Sources, first match wins: HIERARCHY key · legacy OUTER_*/INNER_* keys ·
+# auto-detect from the folder tree · the classic project-/milestone- default.
+TASKS_FILE="TASKS.md"
+TASK_LABEL="${TASK_LABEL:-Task}"
+TASK_LETTER="$(uc "${TASK_LETTER:-T}")"
+NLEV=0
+
+set_level() { eval "PFX_$1=\"\$2\"; LBL_$1=\"\$3\"; LTR_$1=\"\$(uc \"\$4\")\""; }
+pfx()    { eval "printf '%s' \"\$PFX_$1\""; }
+lbl()    { eval "printf '%s' \"\$LBL_$1\""; }
+ltr()    { eval "printf '%s' \"\$LTR_$1\""; }
+
+derive_label() { printf '%s' "$1" | sed 's/[-_]*$//; s/[-_]/ /g' | titlecase; }
+
+pick_letter() {  # pick_letter <label> <used-letters> — first unused letter of the label
+  local w c i=1; w="$(uc "$1" | tr -cd 'A-Z')"
+  while [ "$i" -le "${#w}" ]; do
+    c="$(printf '%s' "$w" | cut -c"$i")"
+    case "$2" in *"$c"*) ;; *) printf '%s' "$c"; return ;; esac
+    i=$((i+1))
+  done
+  for c in X Y Z Q K J V W; do case "$2" in *"$c"*) ;; *) printf '%s' "$c"; return ;; esac; done
+  printf 'L'
+}
+
+nfields() { printf '%s' "$1" | awk -F: '{print NF}'; }
+field()   { printf '%s' "$1" | cut -d: -f"$2"; }
+
+parse_hierarchy() {
+  local tok body label letter prefix used="$TASK_LETTER"
+  for tok in $HIERARCHY; do
+    case "$tok" in
+      @*)
+        body="${tok#@}"
+        TASKS_FILE="$(field "$body" 1)"
+        [ "$(nfields "$body")" -ge 2 ] && TASK_LABEL="$(field "$body" 2)"
+        [ "$(nfields "$body")" -ge 3 ] && TASK_LETTER="$(uc "$(field "$body" 3)")"
+        ;;
+      *)
+        prefix="$(field "$tok" 1)"
+        if [ "$(nfields "$tok")" -ge 2 ]; then label="$(field "$tok" 2)"; else label="$(derive_label "$prefix")"; fi
+        if [ "$(nfields "$tok")" -ge 3 ]; then letter="$(field "$tok" 3)"; else letter="$(pick_letter "$label" "$used")"; fi
+        used="$used$(uc "$letter")"
+        NLEV=$((NLEV+1)); set_level "$NLEV" "$prefix" "$label" "$letter"
+        ;;
+    esac
+  done
+}
+
+autodetect_hierarchy() {  # infer depth + prefixes from the first TASKS.md found
+  local leaf rel depth i seg prefix label letter used="$TASK_LETTER"
+  leaf="$(find "$TASKS_ROOT" -mindepth 2 -maxdepth 5 -name "$TASKS_FILE" 2>/dev/null | sort | head -1)"
+  [ -z "$leaf" ] && return 1
+  rel="${leaf#$TASKS_ROOT/}"
+  depth=$(printf '%s' "$rel" | awk -F/ '{print NF-1}')
+  { [ "$depth" -ge 1 ] && [ "$depth" -le 4 ]; } || return 1
+  i=1
+  while [ "$i" -le "$depth" ]; do
+    seg="$(printf '%s' "$rel" | cut -d/ -f"$i")"
+    prefix="$(printf '%s' "$seg" | sed 's/[0-9].*$//')"
+    [ -n "$prefix" ] || return 1
+    label="$(derive_label "$prefix")"
+    letter="$(pick_letter "$label" "$used")"; used="$used$letter"
+    set_level "$i" "$prefix" "$label" "$letter"
+    i=$((i+1))
+  done
+  NLEV="$depth"
+}
+
+if [ -n "${HIERARCHY:-}" ]; then
+  parse_hierarchy
+elif [ -n "${OUTER_PREFIX:-}${OUTER_LABEL:-}${OUTER_LETTER:-}${INNER_PREFIX:-}${INNER_LABEL:-}${INNER_LETTER:-}" ]; then
+  NLEV=2
+  set_level 1 "${OUTER_PREFIX:-project-}"   "${OUTER_LABEL:-Project}"   "${OUTER_LETTER:-P}"
+  set_level 2 "${INNER_PREFIX:-milestone-}" "${INNER_LABEL:-Milestone}" "${INNER_LETTER:-M}"
+else
+  autodetect_hierarchy || {
+    NLEV=2
+    set_level 1 "project-"   "Project"   "P"
+    set_level 2 "milestone-" "Milestone" "M"
+  }
+fi
+
+ID_RE=""; _i=1
+while [ "$_i" -le "$NLEV" ]; do ID_RE="${ID_RE}$(ltr "$_i")[0-9]+"; _i=$((_i+1)); done
+TASK_RE="${TASK_RE:-^## ${ID_RE}${TASK_LETTER}[0-9]+:}"
+LEAF_LBL="$(lbl "$NLEV")"
 NAME_DISPLAY="$(uc "$PROJECT_NAME")"
 
-# --- slug parsing (honors the configured prefixes) ---------------------------
-outer_num()  { printf '%s' "$1" | sed -E "s/^${OUTER_PREFIX}([0-9]+)-.*/\1/"; }
-outer_name() { printf '%s' "$1" | sed -E "s/^${OUTER_PREFIX}[0-9]+-//; s/-/ /g"; }
-inner_num()  { printf '%s' "$1" | sed -E "s/^${INNER_PREFIX}([0-9]+)-.*/\1/"; }
-inner_name() { printf '%s' "$1" | sed -E "s/^${INNER_PREFIX}[0-9]+-//; s/-/ /g"; }
+sel_example() {  # a plausible selector, e.g. P0M1 / I0P1M2
+  local i=1 out=""
+  while [ "$i" -le "$NLEV" ]; do out="$out$(ltr "$i")$((i-1))"; i=$((i+1)); done
+  printf '%s' "$out"
+}
+
+# --- slug parsing (honors the per-level prefixes) -----------------------------
+slug_num()  { printf '%s' "$2" | sed -E "s/^$(pfx "$1")([0-9]+)-.*/\1/"; }
+slug_name() { printf '%s' "$2" | sed -E "s/^$(pfx "$1")[0-9]+-//; s/-/ /g"; }
 
 GITDIR="$(git rev-parse --git-dir 2>/dev/null || echo .git)"
 [ -d "$GITDIR" ] && VIEW_FILE="$GITDIR/projstatus-view" || VIEW_FILE="$ROOT/.projstatus-view"
@@ -114,8 +205,14 @@ bar() {
   printf '%s' "$out"
 }
 
-# --- pointer + milestone ordering -------------------------------------------
-all_ms() { find "$TASKS_ROOT" -mindepth 2 -maxdepth 2 -type d -name "${INNER_PREFIX}*" 2>/dev/null | sort -V; }
+# --- walking the tree ---------------------------------------------------------
+lvl_dirs()  { find "$TASKS_ROOT" -mindepth "$1" -maxdepth "$1" -type d -name "$(pfx "$1")*" 2>/dev/null | sort -V; }
+leaf_dirs() { lvl_dirs "$NLEV"; }
+kids() {  # child dirs of $1 at level $2
+  find "$1" -mindepth 1 -maxdepth 1 -type d -name "$(pfx "$2")*" 2>/dev/null | sort -V
+}
+dir_level() { printf '%s' "${1#$TASKS_ROOT/}" | awk -F/ '{print NF}'; }
+path_seg()  { printf '%s' "${1#$TASKS_ROOT/}" | cut -d/ -f"$2"; }
 
 count_file() {
   local file="$1" hdr="$2" t dn
@@ -123,85 +220,143 @@ count_file() {
   dn=$(grep -cE "$STATUS_DONE" "$file" 2>/dev/null); dn=${dn:-0}
   printf '%s %s' "$dn" "$t"
 }
+count_tree() {  # done/total across every TASKS.md under $1
+  local dn tt
+  dn=$(find "$1" -name "$TASKS_FILE" -exec grep -hcE "$STATUS_DONE" {} + 2>/dev/null | awk '{s+=$1}END{print s+0}')
+  tt=$(find "$1" -name "$TASKS_FILE" -exec grep -hcE "$TASK_RE" {} + 2>/dev/null | awk '{s+=$1}END{print s+0}')
+  printf '%s %s' "$dn" "$tt"
+}
 
-# the pointer milestone slug: explicit line if present, else first unfinished milestone
+# --- pointer -------------------------------------------------------------------
+# the pointer slug: explicit line if present, else first unfinished leaf
 pointer_slug() {
-  local s; s=$(grep -m1 "$POINTER_PATTERN" "$POINTER_FILE" 2>/dev/null | sed -n 's/.*`\([^`]*\)`.*/\1/p')
-  [ -n "$s" ] && { printf '%s' "$s"; return; }
+  # the first backtick span on the pointer line (pointer lines may quote more than one)
+  grep -m1 "$POINTER_PATTERN" "$POINTER_FILE" 2>/dev/null | sed -n 's/[^`]*`\([^`]*\)`.*/\1/p'
+}
+first_unfinished_leaf() {
   local d dn tt
   while IFS= read -r d; do
-    set -- $(count_file "$d/TASKS.md" "$TASK_RE"); dn=$1; tt=$2
-    if [ "${tt:-0}" -gt 0 ] && [ "$dn" -lt "$tt" ]; then basename "$d"; return; fi
-  done < <(all_ms)
-  basename "$(all_ms | tail -1)"
+    set -- $(count_file "$d/$TASKS_FILE" "$TASK_RE"); dn=$1; tt=$2
+    if [ "${tt:-0}" -gt 0 ] && [ "$dn" -lt "$tt" ]; then printf '%s' "$d"; return; fi
+  done < <(leaf_dirs)
+  leaf_dirs | tail -1
 }
 pointer_state() {
   local line; line=$(grep -m1 "$POINTER_PATTERN" "$POINTER_FILE" 2>/dev/null)
   if [ -n "$line" ]; then printf '%s' "$line" | sed -E 's/.*—[[:space:]]*//; s/[*.[:space:]]*$//'
-  else printf 'you are here (first unfinished milestone)'; fi
+  else printf 'you are here (first unfinished %s)' "$(lc "$LEAF_LBL")"; fi
+}
+slug_dir() { find "$TASKS_ROOT" -maxdepth "$NLEV" -type d -name "$1" 2>/dev/null | head -1; }
+ptr_leaf() {  # the leaf the pointer denotes; a group pointer descends to its first unfinished leaf
+  local d lvl c dn tt slug
+  slug="$(pointer_slug)"
+  [ -n "$slug" ] && d="$(slug_dir "$slug")" || d=""
+  [ -z "$d" ] && { first_unfinished_leaf; return; }
+  lvl="$(dir_level "$d")"
+  [ "$lvl" -ge "$NLEV" ] && { printf '%s' "$d"; return; }
+  while IFS= read -r c; do
+    set -- $(count_file "$c/$TASKS_FILE" "$TASK_RE"); dn=$1; tt=$2
+    if [ "${tt:-0}" -gt 0 ] && [ "$dn" -lt "$tt" ]; then printf '%s' "$c"; return; fi
+  done < <(find "$d" -mindepth $((NLEV-lvl)) -maxdepth $((NLEV-lvl)) -type d -name "$(pfx "$NLEV")*" 2>/dev/null | sort -V)
+  find "$d" -mindepth $((NLEV-lvl)) -maxdepth $((NLEV-lvl)) -type d -name "$(pfx "$NLEV")*" 2>/dev/null | sort -V | head -1
 }
 
-dir_token() {
-  local d="$1" pn mn
-  pn=$(outer_num "$(basename "$(dirname "$d")")")
-  mn=$(inner_num "$(basename "$d")")
-  printf '%s%s%s%s' "$OUTER_LETTER" "$pn" "$INNER_LETTER" "$mn"
+dir_token() {  # P0M2-style token for a dir at any level
+  local rel="${1#$TASKS_ROOT/}" out="" i=1 seg oldifs="$IFS"
+  IFS=/
+  for seg in $rel; do out="$out$(ltr "$i")$(slug_num "$i" "$seg")"; i=$((i+1)); done
+  IFS="$oldifs"
+  printf '%s' "$out"
 }
-slug_dir() { local s="$1"; ls -d "$TASKS_ROOT"/*/"$s" 2>/dev/null | head -1; }
-pnmn_dir() { local pn=$1 mn=$2; ls -d "$TASKS_ROOT"/"${OUTER_PREFIX}${pn}"-*/"${INNER_PREFIX}${mn}"-* 2>/dev/null | head -1; }
-proj_dir() { local pn=$1; ls -d "$TASKS_ROOT"/"${OUTER_PREFIX}${pn}"-* 2>/dev/null | head -1; }
-ms_index() { local target="$1" i=0 d; while IFS= read -r d; do i=$((i+1)); [ "$d" = "$target" ] && { printf '%s' "$i"; return; }; done < <(all_ms); printf '0'; }
-ms_at()    { all_ms | sed -n "${1}p"; }
-ms_count() { all_ms | wc -l | tr -d ' '; }
+nums_dir() {  # nums_dir <n1> [n2 …] → the dir those level numbers name
+  local g="$TASKS_ROOT" i=1 n
+  for n in "$@"; do g="$g/$(pfx "$i")${n}-*"; i=$((i+1)); done
+  ls -d $g 2>/dev/null | head -1
+}
 
 # --- selector resolution -> "KIND<TAB>ARG" -----------------------------------
+classify() {  # an existing dir → LEAF (leaf level) | GROUP (has children) | SUMMARY
+  local d="$1" lvl; lvl="$(dir_level "$d")"
+  if [ "$lvl" -ge "$NLEV" ]; then printf 'LEAF\t%s' "$d"
+  elif [ -n "$(kids "$d" $((lvl+1)) | head -1)" ]; then printf 'GROUP\t%s' "$d"
+  else printf 'SUMMARY\t%s' "$d"; fi
+}
+
 resolve() {
   local sel; sel="$(lc "$1")"
-  local cur base idx n d pn mn
+  local d i l num rest nums
   case "$sel" in
     ""|pointer)
-      d="$(slug_dir "$(pointer_slug)")"
-      [ -n "$d" ] && printf 'MS\t%s' "$d" || printf 'NONE\tno milestones found under %s' "$TASKS_ROOT"; return ;;
+      d="$(ptr_leaf)"
+      [ -n "$d" ] && printf 'LEAF\t%s' "$d" || printf 'NONE\tno %s folders found under %s' "$(lc "$LEAF_LBL")" "$TASKS_ROOT"; return ;;
     ls|list|--list|-l) printf 'LIST\t'; return ;;
-    next|prev)
-      cur="$(cat "$VIEW_FILE" 2>/dev/null)"; [ -z "$cur" ] && cur="pointer"
-      [ "$cur" = "pointer" ] && base="$(slug_dir "$(pointer_slug)")" || base="$(_sel_to_dir "$cur")"
-      [ -z "$base" ] && base="$(slug_dir "$(pointer_slug)")"
-      idx="$(ms_index "$base")"; n="$(ms_count)"
-      if [ "$sel" = "next" ]; then idx=$((idx+1)); else idx=$((idx-1)); fi
-      [ "$idx" -lt 1 ] && idx=1; [ "$idx" -gt "$n" ] && idx="$n"
-      d="$(ms_at "$idx")"
-      [ -n "$d" ] && printf 'MS\t%s' "$d" || printf 'NONE\tno milestone there'; return ;;
+    next|prev) resolve_nav "$sel"; return ;;
   esac
-  if printf '%s' "$sel" | grep -qE "^${OUTER_L}[0-9]+${INNER_L}[0-9]+$"; then
-    pn=$(printf '%s' "$sel" | sed -E "s/^${OUTER_L}([0-9]+)${INNER_L}[0-9]+$/\1/"); mn=$(printf '%s' "$sel" | sed -E "s/^${OUTER_L}[0-9]+${INNER_L}([0-9]+)$/\1/")
-    d="$(pnmn_dir "$pn" "$mn")"
-    if [ -n "$d" ]; then printf 'MS\t%s' "$d"
-    elif [ -n "$(proj_dir "$pn")" ]; then printf 'NONE\t%s%s%s%s has no TASKS.md (summary-only — try %s%s)' "$OUTER_LETTER" "$pn" "$INNER_LETTER" "$mn" "$OUTER_LETTER" "$pn"
-    else printf 'NONE\tno %s %s' "$(lc "$OUTER_LABEL")" "$pn"; fi
+  # letter-number tokens, outermost first: L1n[L2n[…]] — full or partial depth
+  rest="$sel"; i=0; nums=""
+  while [ "$i" -lt "$NLEV" ] && [ -n "$rest" ]; do
+    l="$(lc "$(ltr $((i+1)))")"
+    case "$rest" in
+      "$l"[0-9]*)
+        i=$((i+1))
+        rest="${rest#$l}"
+        num="$(printf '%s' "$rest" | sed 's/[^0-9].*//')"
+        rest="${rest#$num}"
+        nums="$nums $num" ;;
+      *) break ;;
+    esac
+  done
+  if [ -n "$nums" ] && [ -z "$rest" ]; then
+    d="$(nums_dir $nums)"
+    if [ -n "$d" ]; then classify "$d"; return; fi
+    set -- $nums
+    local k=$# last pn="" pd j=1
+    eval "last=\${$k}"
+    if [ "$k" -eq 1 ]; then printf 'NONE\tno %s %s' "$(lc "$(lbl 1)")" "$last"; return; fi
+    while [ "$j" -lt "$k" ]; do eval "pn=\"\$pn \${$j}\""; j=$((j+1)); done
+    pd="$(nums_dir $pn)"
+    if [ -n "$pd" ]; then printf 'NONE\tno %s %s under %s (try %s)' "$(lc "$(lbl "$k")")" "$last" "$(dir_token "$pd")" "$(dir_token "$pd")"
+    else printf 'NONE\tno match for %s' "$(uc "$sel")"; fi
     return
   fi
-  if printf '%s' "$sel" | grep -qE "^${OUTER_L}[0-9]+$"; then
-    pn=$(printf '%s' "$sel" | sed -E "s/^${OUTER_L}([0-9]+)$/\1/"); d="$(proj_dir "$pn")"
-    if [ -z "$d" ]; then printf 'NONE\tno %s %s' "$(lc "$OUTER_LABEL")" "$pn"
-    elif [ -n "$(find "$d" -mindepth 1 -maxdepth 1 -type d -name "${INNER_PREFIX}*" 2>/dev/null | head -1)" ]; then printf 'PROJ\t%s' "$d"
-    else printf 'SUMMARY\t%s' "$d"; fi
-    return
-  fi
-  if printf '%s' "$sel" | grep -qE "^${INNER_PREFIX}"; then
-    d="$(slug_dir "$1")"; [ -n "$d" ] && printf 'MS\t%s' "$d" || printf 'NONE\tno %s %s' "$(lc "$INNER_LABEL")" "$1"; return
-  fi
+  # a raw folder slug at any level
+  i=1
+  while [ "$i" -le "$NLEV" ]; do
+    case "$sel" in
+      "$(lc "$(pfx "$i")")"*)
+        d="$(slug_dir "$1")"
+        [ -n "$d" ] && classify "$d" || printf 'NONE\tno %s %s' "$(lc "$(lbl "$i")")" "$1"
+        return ;;
+    esac
+    i=$((i+1))
+  done
   printf 'NONE\tunknown selector: %s' "$1"
 }
-_sel_to_dir() { local r; r="$(resolve "$1")"; case "$r" in MS*) printf '%s' "${r#MS	}";; *) printf '';; esac }
+
+resolve_nav() {  # next/prev among siblings at the current view's level
+  local dirn="$1" cur base lvl idx=0 n=0 d
+  cur="$(cat "$VIEW_FILE" 2>/dev/null)"; [ -z "$cur" ] && cur="pointer"
+  case "$cur" in pointer|ls) base="$(ptr_leaf)" ;; *) base="$(_sel_to_dir "$cur")" ;; esac
+  [ -z "$base" ] && base="$(ptr_leaf)"
+  [ -z "$base" ] && { printf 'NONE\tnothing to step through under %s' "$TASKS_ROOT"; return; }
+  lvl="$(dir_level "$base")"
+  while IFS= read -r d; do n=$((n+1)); [ "$d" = "$base" ] && idx=$n; done < <(lvl_dirs "$lvl")
+  if [ "$dirn" = "next" ]; then idx=$((idx+1)); else idx=$((idx-1)); fi
+  [ "$idx" -lt 1 ] && idx=1; [ "$idx" -gt "$n" ] && idx="$n"
+  d="$(lvl_dirs "$lvl" | sed -n "${idx}p")"
+  [ -n "$d" ] && classify "$d" || printf 'NONE\tnothing there'
+}
+_sel_to_dir() {
+  local r; r="$(resolve "$1")"
+  case "${r%%	*}" in LEAF|GROUP|SUMMARY) printf '%s' "${r#*	}" ;; *) : ;; esac
+}
 
 write_view() {
   local sel="$1" r kind arg tok
   r="$(resolve "$sel")"; kind="${r%%	*}"; arg="${r#*	}"
   [ "$kind" = "NONE" ] && return 1
   case "$kind" in
-    MS) tok="$(dir_token "$arg")" ;;
-    PROJ|SUMMARY) tok="${OUTER_LETTER}$(outer_num "$(basename "$arg")")" ;;
+    LEAF|GROUP|SUMMARY) tok="$(dir_token "$arg")" ;;
     LIST) tok="ls" ;;
     *) tok="$sel" ;;
   esac
@@ -235,9 +390,9 @@ render_items() {
 
 inbox_open() {
   [ -f "$INBOX" ] || { printf '0'; return; }
-  awk '
-    /^## P[0-9]+M[0-9]+/ { inround=1; next }
-    /^## /               { inround=0 }
+  awk -v round="^## ${ID_RE}" '
+    $0 ~ round { inround=1; next }
+    /^## /     { inround=0 }
     inround && /^- / && $0 !~ /Converted to/ { c++ }
     END { print c+0 }' "$INBOX"
 }
@@ -256,7 +411,7 @@ nav_hint() {
     echo ""
     echo "  ${d}keys${r}  ${k}n${r}${d} next  ${k}p${r}${d} prev  ${k}c${r}${d} live  ${k}a${r}${d} all  ${k}g${r}${d} go to  ${k}q${r}${d} quit${r}"
   else
-    printf '  %s↹ run:  projstatus <%s0%s1|%s2|next>   ·   projstatus view <sel> moves the pane%s\n' "$DIM" "$OUTER_LETTER" "$INNER_LETTER" "$OUTER_LETTER" "$RST"
+    printf '  %s↹ run:  projstatus <%s|%s2|prev>   ·   projstatus view <sel> moves the pane%s\n' "$DIM" "$(sel_example)" "$(ltr 1)" "$RST"
   fi
 }
 
@@ -273,25 +428,27 @@ render_inbox_line() {
   return 0
 }
 
-render_milestone() {
+render_leaf() {
   local dir="$1" cols; cols=$(cols_now)
-  local slug pslug pnum pname mnum mname tasks gaps issues
-  slug="$(basename "$dir")"; pslug="$(basename "$(dirname "$dir")")"
-  pnum=$(outer_num "$pslug")
-  pname=$(outer_name "$pslug" | titlecase)
-  mnum=$(inner_num "$slug")
-  mname=$(inner_name "$slug")
-  tasks="$dir/TASKS.md"; gaps="$dir/GAPS.md"; issues="$dir/ISSUES.md"
+  local i seg tasks gaps issues
+  i=1
+  while [ "$i" -lt "$NLEV" ]; do
+    seg="$(path_seg "$dir" "$i")"
+    printf '  %s%s %s%s · %s\n' "$BOLD" "$(lbl "$i")" "$(slug_num "$i" "$seg")" "$RST" "$(slug_name "$i" "$seg" | titlecase)"
+    i=$((i+1))
+  done
+  seg="$(path_seg "$dir" "$NLEV")"
+  printf '  %s%s %s%s — %s%s%s\n' "$BOLD" "$LEAF_LBL" "$(slug_num "$NLEV" "$seg")" "$RST" "$MAG" "$(slug_name "$NLEV" "$seg")" "$RST"
+  tasks="$dir/$TASKS_FILE"; gaps="$dir/GAPS.md"; issues="$dir/ISSUES.md"
 
-  local ptr_dir ptr_idx my_idx rel ptok
-  ptr_dir="$(slug_dir "$(pointer_slug)")"; ptr_idx="$(ms_index "$ptr_dir")"; my_idx="$(ms_index "$dir")"
-  ptok="$(dir_token "$ptr_dir")"
+  local ptr_dir ptr_idx=0 my_idx=0 n=0 rel d
+  ptr_dir="$(ptr_leaf)"
+  while IFS= read -r d; do
+    n=$((n+1)); [ "$d" = "$ptr_dir" ] && ptr_idx=$n; [ "$d" = "$dir" ] && my_idx=$n
+  done < <(leaf_dirs)
   if [ "$dir" = "$ptr_dir" ]; then rel="◆ current pointer — $(pointer_state)"
-  elif [ "$my_idx" -lt "$ptr_idx" ]; then rel="↩ past milestone"
-  else rel="↪ upcoming milestone"; fi
-
-  printf '  %s%s %s%s · %s\n' "$BOLD" "$OUTER_LABEL" "$pnum" "$RST" "$pname"
-  printf '  %s%s %s%s — %s%s%s\n' "$BOLD" "$INNER_LABEL" "$mnum" "$RST" "$MAG" "$mname" "$RST"
+  elif [ "$my_idx" -lt "$ptr_idx" ]; then rel="↩ past $(lc "$LEAF_LBL")"
+  else rel="↪ upcoming $(lc "$LEAF_LBL")"; fi
   printf '  %s%s%s\n\n' "$DIM" "$rel" "$RST"
 
   if [ -f "$tasks" ]; then
@@ -310,79 +467,99 @@ render_milestone() {
     rule $(( cols - 2 )); render_items "$issues" "$ISS_RE" 11 "Priority"
   fi
 
-  local pd pt
-  pd=$(grep -hcE "$STATUS_DONE" "$(dirname "$dir")"/*/TASKS.md 2>/dev/null | awk '{s+=$1}END{print s+0}')
-  pt=$(grep -hcE "$TASK_RE" "$(dirname "$dir")"/*/TASKS.md 2>/dev/null | awk '{s+=$1}END{print s+0}')
-  printf '\n  %s%s %s%s  %s%s%s  %s/%s tasks\n' "$BOLD" "$OUTER_LABEL" "$pnum" "$RST" "$GRN" "$(bar "$pd" "$pt" 16)" "$RST" "$pd" "$pt"
+  local pd pt parent agg
+  if [ "$NLEV" -ge 2 ]; then
+    parent="$(dirname "$dir")"
+    agg="$(lbl $((NLEV-1))) $(slug_num $((NLEV-1)) "$(basename "$parent")")"
+  else
+    parent="$TASKS_ROOT"; agg="Overall"
+  fi
+  pd=$(grep -hcE "$STATUS_DONE" "$parent"/*/"$TASKS_FILE" 2>/dev/null | awk '{s+=$1}END{print s+0}')
+  pt=$(grep -hcE "$TASK_RE" "$parent"/*/"$TASKS_FILE" 2>/dev/null | awk '{s+=$1}END{print s+0}')
+  printf '\n  %s%s%s  %s%s%s  %s/%s tasks\n' "$BOLD" "$agg" "$RST" "$GRN" "$(bar "$pd" "$pt" 16)" "$RST" "$pd" "$pt"
 
   render_inbox_line
-  footer_nav "$(dir_token "$dir")" "$ptok"
+  footer_nav "$(dir_token "$dir")" "$(dir_token "$ptr_dir")"
 }
 
-render_project() {
-  local pdir="$1" cols; cols=$(cols_now)
-  local pslug pnum pname; pslug="$(basename "$pdir")"
-  pnum=$(outer_num "$pslug")
-  pname=$(outer_name "$pslug" | titlecase)
-  local ptr_dir; ptr_dir="$(slug_dir "$(pointer_slug)")"
-  printf '  %s%s %s · %s%s\n' "$BOLD" "$OUTER_LABEL" "$pnum" "$pname" "$RST"; rule $(( cols - 2 ))
-  local d slug mnum mname mk
+group_row() {  # one child row inside a group view / the list view
+  local d="$1" lvl="$2" namew="$3" barw="$4" ind="$5" ptr="$6"
+  local slug num name mk dn tt go=0
+  slug="$(basename "$d")"; num="$(slug_num "$lvl" "$slug")"; name="$(slug_name "$lvl" "$slug")"
+  if [ "$lvl" -eq "$NLEV" ]; then
+    set -- $(count_file "$d/$TASKS_FILE" "$TASK_RE"); dn=$1; tt=$2
+    if [ -f "$d/GAPS.md" ]; then set -- $(count_file "$d/GAPS.md" "$GAP_RE"); go=$(( $2 - $1 )); fi
+  else
+    set -- $(count_tree "$d"); dn=$1; tt=$2
+  fi
+  case "$ptr" in
+    "$d"|"$d"/*) mk="${CYN}▸${RST}" ;;
+    *) if [ "$dn" = "$tt" ] && [ "$tt" -gt 0 ]; then mk="${GRN}✓${RST}"; else mk="${DIM}·${RST}"; fi ;;
+  esac
+  printf '%s  %s %s%s %-*s %s%s%s %s%s/%s%s' "$ind" "$mk" "$(ltr "$lvl")" "$num" "$namew" "$(printf '%s' "$name" | cut -c1-"$namew")" "$GRN" "$(bar "$dn" "$tt" "$barw")" "$RST" "$DIM" "$dn" "$tt" "$RST"
+  [ "$go" -gt 0 ] && printf ' %s+%sg%s' "$YEL" "$go" "$RST"
+  printf '\n'
+}
+
+render_group() {
+  local dir="$1" cols; cols=$(cols_now)
+  local lvl i seg d
+  lvl="$(dir_level "$dir")"
+  i=1
+  while [ "$i" -lt "$lvl" ]; do
+    seg="$(path_seg "$dir" "$i")"
+    printf '  %s%s %s · %s%s\n' "$DIM" "$(lbl "$i")" "$(slug_num "$i" "$seg")" "$(slug_name "$i" "$seg" | titlecase)" "$RST"
+    i=$((i+1))
+  done
+  seg="$(path_seg "$dir" "$lvl")"
+  printf '  %s%s %s · %s%s\n' "$BOLD" "$(lbl "$lvl")" "$(slug_num "$lvl" "$seg")" "$(slug_name "$lvl" "$seg" | titlecase)" "$RST"
+  rule $(( cols - 2 ))
+  local ptr; ptr="$(ptr_leaf)"
   while IFS= read -r d; do
     [ -z "$d" ] && continue
-    slug="$(basename "$d")"; mnum=$(inner_num "$slug")
-    mname=$(inner_name "$slug")
-    set -- $(count_file "$d/TASKS.md" "$TASK_RE"); local md=$1 mt=$2
-    local go=0; if [ -f "$d/GAPS.md" ]; then set -- $(count_file "$d/GAPS.md" "$GAP_RE"); go=$(( $2 - $1 )); fi
-    if [ "$d" = "$ptr_dir" ]; then mk="${CYN}▸${RST}"; elif [ "$md" = "$mt" ] && [ "$mt" -gt 0 ]; then mk="${GRN}✓${RST}"; else mk="${DIM}·${RST}"; fi
-    printf '  %s %s%s %-22s %s%s%s %s%s/%s%s' "$mk" "$INNER_LETTER" "$mnum" "$(printf '%s' "$mname" | cut -c1-22)" "$GRN" "$(bar "$md" "$mt" 8)" "$RST" "$DIM" "$md" "$mt" "$RST"
-    [ "$go" -gt 0 ] && printf ' %s+%sg%s' "$YEL" "$go" "$RST"
-    printf '\n'
-  done < <(find "$pdir" -mindepth 1 -maxdepth 1 -type d -name "${INNER_PREFIX}*" | sort -V)
+    group_row "$d" $((lvl+1)) 22 8 "" "$ptr"
+  done < <(kids "$dir" $((lvl+1)))
   render_inbox_line
-  footer_nav "${OUTER_LETTER}$pnum" "$(dir_token "$ptr_dir")"
+  footer_nav "$(dir_token "$dir")" "$(dir_token "$ptr")"
 }
 
 render_summary() {
-  local pdir="$1" cols; cols=$(cols_now)
-  local pslug pnum pname; pslug="$(basename "$pdir")"
-  pnum=$(outer_num "$pslug")
-  pname=$(outer_name "$pslug" | titlecase)
-  printf '  %s%s %s · %s%s  %s(summary only)%s\n' "$BOLD" "$OUTER_LABEL" "$pnum" "$pname" "$RST" "$DIM" "$RST"; rule $(( cols - 2 ))
-  if [ -f "$pdir/SUMMARY.md" ]; then
-    grep -E '^- ' "$pdir/SUMMARY.md" | sed -E "s/^- /  ${DIM}·${RST} /" | cut -c1-$(( cols + 12 ))
+  local dir="$1" cols; cols=$(cols_now)
+  local lvl slug; lvl="$(dir_level "$dir")"; slug="$(basename "$dir")"
+  printf '  %s%s %s · %s%s  %s(summary only)%s\n' "$BOLD" "$(lbl "$lvl")" "$(slug_num "$lvl" "$slug")" "$(slug_name "$lvl" "$slug" | titlecase)" "$RST" "$DIM" "$RST"
+  rule $(( cols - 2 ))
+  if [ -f "$dir/SUMMARY.md" ]; then
+    grep -E '^- ' "$dir/SUMMARY.md" | sed -E "s/^- /  ${DIM}·${RST} /" | cut -c1-$(( cols + 12 ))
   else
     printf '  %sno SUMMARY.md%s\n' "$DIM" "$RST"
   fi
-  printf '\n  %sNot yet expanded into TASKS.md%s\n' "$DIM" "$RST"
-  footer_nav "${OUTER_LETTER}$pnum" "$(dir_token "$(slug_dir "$(pointer_slug)")")"
+  printf '\n  %sNot yet expanded into %s%s\n' "$DIM" "$TASKS_FILE" "$RST"
+  footer_nav "$(dir_token "$dir")" "$(dir_token "$(ptr_leaf)")"
+}
+
+render_list_level() {  # recursive tree: $1=parent dir  $2=level  $3=indent
+  local parent="$1" lvl="$2" ind="$3"
+  local d slug num name dn tt ptr="$4"
+  while IFS= read -r d; do
+    [ -z "$d" ] && continue
+    if [ "$lvl" -eq "$NLEV" ]; then
+      group_row "$d" "$lvl" 20 6 "$ind" "$ptr"
+    else
+      slug="$(basename "$d")"; num="$(slug_num "$lvl" "$slug")"; name="$(slug_name "$lvl" "$slug" | titlecase)"
+      if [ -z "$(kids "$d" $((lvl+1)) | head -1)" ]; then
+        printf '\n%s  %s%s%s · %s%s  %s— summary only%s\n' "$ind" "$BOLD" "$(ltr "$lvl")$num" "$RST" "$name" "$RST" "$DIM" "$RST"
+      else
+        set -- $(count_tree "$d"); dn=$1; tt=$2
+        printf '\n%s  %s%s%s · %s%s  %s%s/%s%s\n' "$ind" "$BOLD" "$(ltr "$lvl")$num" "$RST" "$name" "$RST" "$DIM" "$dn" "$tt" "$RST"
+        render_list_level "$d" $((lvl+1)) "$ind  " "$ptr"
+      fi
+    fi
+  done < <(kids "$parent" "$lvl")
 }
 
 render_list() {
-  local cols; cols=$(cols_now)
-  local ptr_dir; ptr_dir="$(slug_dir "$(pointer_slug)")"
-  local pdir pslug pnum pname d slug mnum mname mk md mt nms
-  while IFS= read -r pdir; do
-    pslug="$(basename "$pdir")"
-    pnum=$(outer_num "$pslug")
-    pname=$(outer_name "$pslug" | titlecase)
-    nms="$(find "$pdir" -mindepth 1 -maxdepth 1 -type d -name "${INNER_PREFIX}*" 2>/dev/null | wc -l | tr -d ' ')"
-    if [ "$nms" -gt 0 ]; then
-      local ppd ppt
-      ppd=$(grep -hcE "$STATUS_DONE" "$pdir"/*/TASKS.md 2>/dev/null | awk '{s+=$1}END{print s+0}')
-      ppt=$(grep -hcE "$TASK_RE" "$pdir"/*/TASKS.md 2>/dev/null | awk '{s+=$1}END{print s+0}')
-      printf '\n  %s%s%s · %s%s  %s%s/%s%s\n' "$BOLD" "$OUTER_LETTER" "$pnum" "$pname" "$RST" "$DIM" "$ppd" "$ppt" "$RST"
-      while IFS= read -r d; do
-        [ -z "$d" ] && continue
-        slug="$(basename "$d")"; mnum=$(inner_num "$slug")
-        mname=$(inner_name "$slug")
-        set -- $(count_file "$d/TASKS.md" "$TASK_RE"); md=$1; mt=$2
-        if [ "$d" = "$ptr_dir" ]; then mk="${CYN}▸${RST}"; elif [ "$md" = "$mt" ] && [ "$mt" -gt 0 ]; then mk="${GRN}✓${RST}"; else mk="${DIM}·${RST}"; fi
-        printf '    %s %s%s %-20s %s%s%s %s%s/%s%s\n' "$mk" "$INNER_LETTER" "$mnum" "$(printf '%s' "$mname" | cut -c1-20)" "$GRN" "$(bar "$md" "$mt" 6)" "$RST" "$DIM" "$md" "$mt" "$RST"
-      done < <(find "$pdir" -mindepth 1 -maxdepth 1 -type d -name "${INNER_PREFIX}*" | sort -V)
-    else
-      printf '\n  %s%s%s · %s%s  %s— summary only%s\n' "$BOLD" "$OUTER_LETTER" "$pnum" "$pname" "$RST" "$DIM" "$RST"
-    fi
-  done < <(find "$TASKS_ROOT" -mindepth 1 -maxdepth 1 -type d -name "${OUTER_PREFIX}*" | sort -V)
+  local ptr; ptr="$(ptr_leaf)"
+  render_list_level "$TASKS_ROOT" 1 "" "$ptr"
   render_inbox_line
   printf '\n'; nav_hint
 }
@@ -391,10 +568,10 @@ render_dispatch() {
   local sel="$1" r kind arg
   r="$(resolve "$sel")"; kind="${r%%	*}"; arg="${r#*	}"
   case "$kind" in
-    MS)      header "status"; render_milestone "$arg" ;;
-    PROJ)    header "project"; render_project "$arg" ;;
-    SUMMARY) header "project"; render_summary "$arg" ;;
-    LIST)    header "all projects"; render_list ;;
+    LEAF)    header "status"; render_leaf "$arg" ;;
+    GROUP)   header "$(lc "$(lbl "$(dir_level "$arg")")")"; render_group "$arg" ;;
+    SUMMARY) header "$(lc "$(lbl "$(dir_level "$arg")")")"; render_summary "$arg" ;;
+    LIST)    header "overview"; render_list ;;
     *)       header "status"; printf '  %s⚠ %s%s\n' "$YEL" "$arg" "$RST"; printf '  %stry: projstatus ls%s\n' "$DIM" "$RST" ;;
   esac
 }
@@ -417,7 +594,7 @@ handle_key() {
 }
 
 usage() {
-  sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//; s/^#$//'
+  awk 'NR>2 && !/^#/ {exit} NR>2 {sub(/^# ?/,""); print}' "$0"
 }
 
 # =============================== main ========================================
@@ -428,7 +605,7 @@ case "${1:-}" in
     if write_view "$sel"; then
       tok="$(cat "$VIEW_FILE")"
       printf '%spane → %s%s%s\n' "$DIM" "$RST$MAG" "$tok" "$RST"
-      [ "$tok" = "pointer" ] && printf '%s  (following the live pointer: %s)%s\n' "$DIM" "$(dir_token "$(slug_dir "$(pointer_slug)")")" "$RST"
+      [ "$tok" = "pointer" ] && printf '%s  (following the live pointer: %s)%s\n' "$DIM" "$(dir_token "$(ptr_leaf)")" "$RST"
     else
       printf '%s⚠ unknown selector: %s%s\n' "$YEL" "$sel" "$RST"; exit 1
     fi
@@ -459,7 +636,7 @@ case "${1:-}" in
           handle_key "$key"; rc=$?
           if [ "$rc" = 2 ]; then clear_screen; printf '  projstatus closed.  restart:  projstatus --watch\n'; exit 0; fi
           if [ "$rc" = 3 ]; then
-            printf '\n  %sgo to%s (e.g. %s2, %s1%s3, pointer) — then Enter: ' "$BOLD" "$RST" "$OUTER_LETTER" "$OUTER_LETTER" "$INNER_LETTER"
+            printf '\n  %sgo to%s (e.g. %s2, %s, pointer) — then Enter: ' "$BOLD" "$RST" "$(ltr 1)" "$(sel_example)"
             IFS= read -r sel || sel=""
             [ -n "$sel" ] && { write_view "$sel" || true; }
           fi

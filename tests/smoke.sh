@@ -101,6 +101,87 @@ if want depth3; then
   assert_contains "depth3 bad selector"             "$out" "unknown selector"
 fi
 
+# --- depth2: a single folder level (milestone → task), zero config -----------
+if want depth2; then
+  d="$(fixture_dir depth2)"
+
+  out="$(run "$d")"   # no pointer line → first unfinished milestone
+  assert_contains "depth2 pointer: milestone line" "$out" "Milestone 0"
+  assert_contains "depth2 pointer: is the pointer" "$out" "◆ current pointer"
+  assert_contains "depth2 pointer: open task"      "$out" "M0T1"
+  assert_contains "depth2 pointer: overall bar"    "$out" "Overall"
+  assert_not_contains "depth2 pointer: no second level" "$out" "Project"
+
+  out="$(run "$d" M1)"
+  assert_contains "depth2 M1: leaf view"           "$out" "Milestone 1"
+  assert_contains "depth2 M1: task"                "$out" "M1T0"
+  assert_contains "depth2 M1: upcoming"            "$out" "↪ upcoming"
+
+  out="$(run "$d" ls)"
+  assert_contains "depth2 ls: row 0"               "$out" "M0 mvp"
+  assert_contains "depth2 ls: row 1"               "$out" "M1 polish"
+
+  out="$(run "$d" view M1; cat "$d/.git/projstatus-view")"
+  assert_contains "depth2 view: token round-trip"  "$out" "M1"
+fi
+
+# --- depth4: initiative → project → milestone → task, zero config -------------
+if want depth4; then
+  d="$(fixture_dir depth4)"
+
+  out="$(run "$d")"   # pointer → milestone-1-endpoints
+  assert_contains "depth4 pointer: initiative crumb" "$out" "Initiative 0"
+  assert_contains "depth4 pointer: project crumb"    "$out" "Project 0"
+  assert_contains "depth4 pointer: milestone line"   "$out" "Milestone 1"
+  assert_contains "depth4 pointer: open task"        "$out" "I0P0M1T0"
+  assert_contains "depth4 pointer: parent bar label" "$out" "Project 0"
+
+  out="$(run "$d" I0P0M0)"
+  assert_contains "depth4 full token: leaf"          "$out" "Milestone 0"
+  assert_contains "depth4 full token: task"          "$out" "I0P0M0T0"
+  assert_contains "depth4 full token: past"          "$out" "↩ past"
+
+  out="$(run "$d" I0P0)"
+  assert_contains "depth4 mid token: project header" "$out" "Project 0 · Api"
+  assert_contains "depth4 mid token: milestone rows" "$out" "M0 schema"
+  assert_contains "depth4 mid token: pointer marker" "$out" "▸"
+
+  out="$(run "$d" I0)"
+  assert_contains "depth4 top token: header"         "$out" "Initiative 0 · Platform"
+  assert_contains "depth4 top token: project row"    "$out" "P0 api"
+  assert_contains "depth4 top token: aggregate"      "$out" "1/3"
+
+  out="$(run "$d" ls)"
+  assert_contains "depth4 ls: initiative row"        "$out" "I0 · Platform"
+  assert_contains "depth4 ls: nested project row"    "$out" "P0 · Api"
+  assert_contains "depth4 ls: leaf row"              "$out" "M1 endpoints"
+  assert_contains "depth4 ls: other initiative"      "$out" "I1 · Growth"
+
+  out="$(run "$d" view I0P1M0; cat "$d/.git/projstatus-view")"
+  assert_contains "depth4 view: deep token round-trip" "$out" "I0P1M0"
+
+  out="$(run "$d" view I1; cat "$d/.git/projstatus-view")"
+  assert_contains "depth4 view: partial token round-trip" "$out" "I1"
+
+  out="$(run "$d" milestone-0-shell)"
+  assert_contains "depth4 slug selector"             "$out" "I0P1M0T0"
+
+  out="$(run "$d" I0P9)"
+  assert_contains "depth4 missing mid level"         "$out" "no project 9 under I0"
+fi
+
+# --- hierarchy config: explicit HIERARCHY key overrides auto-detect ----------
+if want hierarchy; then
+  d="$(fixture_dir depth2)"
+  # task IDs in the fixture stay M0T0-style, so pin TASK_RE alongside
+  printf 'HIERARCHY="milestone-:Sprint:S"\nTASK_RE="^## M[0-9]+T[0-9]+:"\n' >> "$d/.projstatus"
+
+  out="$(run "$d")"
+  assert_contains "hierarchy: custom label"          "$out" "Sprint 0"
+  out="$(run "$d" S1)"
+  assert_contains "hierarchy: custom letter selects" "$out" "Sprint 1"
+fi
+
 # --- legacy: milestone → phase via the old OUTER_*/INNER_* keys --------------
 if want legacy; then
   d="$(fixture_dir legacy)"
