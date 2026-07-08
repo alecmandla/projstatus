@@ -174,26 +174,62 @@ if want depth4; then
   assert_contains "depth4 missing mid level"         "$out" "no project 9 under I0"
 fi
 
-# --- `projstatus next`: the plain-text orientation command -------------------
-if want nextcmd; then
+# --- `projstatus now`: the plain-text orientation command --------------------
+if want nowcmd; then
   d="$(fixture_dir depth3)"
 
-  out="$(run "$d" next)"
-  assert_contains "next: pointer token+path" "$out" "pointer: P0M1  docs/tasks/project-0-foundations/milestone-1-core"
-  assert_contains "next: state line"         "$out" "state: in progress"
-  assert_contains "next: first open task"    "$out" "next-task: P0M1T1  Test the core loop"
-  assert_contains "next: file line"          "$out" "file: docs/tasks/project-0-foundations/milestone-1-core/TASKS.md"
+  out="$(run "$d" now)"
+  assert_contains "now: pointer token+path" "$out" "pointer: P0M1  docs/tasks/project-0-foundations/milestone-1-core"
+  assert_contains "now: state line"         "$out" "state: in progress"
+  assert_contains "now: first open task"    "$out" "next-task: P0M1T1  Test the core loop"
+  assert_contains "now: file line"          "$out" "file: docs/tasks/project-0-foundations/milestone-1-core/TASKS.md"
 
   # a pointer parked on a finished leaf hops to the first open task elsewhere
   sed -i '' 's/`milestone-1-core`/`milestone-0-setup`/' "$d/AGENTS.md"
-  out="$(run "$d" next)"
-  assert_contains "next: complete-leaf note" "$out" "note: P0M0 is complete"
-  assert_contains "next: hopped task"        "$out" "next-task: P0M1T1"
+  out="$(run "$d" now)"
+  assert_contains "now: complete-leaf note" "$out" "note: P0M0 is complete"
+  assert_contains "now: hopped task"        "$out" "next-task: P0M1T1"
 
-  # bare `next` no longer navigates, but `view next` still does
+  # bare next/prev hint instead of navigating; `view next` still navigates
+  out="$(run "$d" next)"
+  assert_contains "now: bare next hints"    "$out" "projstatus view next"
+  assert_contains "now: bare next hints at now" "$out" "projstatus now"
   run "$d" view P0M0 >/dev/null
   out="$(run "$d" view next; cat "$d/.git/projstatus-view")"
-  assert_contains "next: view next still navigates" "$out" "P0M1"
+  assert_contains "now: view next still navigates" "$out" "P0M1"
+fi
+
+# --- altitude views: -<k> and level-label words, anchored at the pointer -----
+if want altitude; then
+  d="$(fixture_dir depth3)"   # pointer → P0M1
+
+  out="$(run "$d" -2)"        # current milestone among its siblings, no tasks
+  assert_contains "altitude -2: group header"   "$out" "Project 0 · Foundations"
+  assert_contains "altitude -2: sibling rows"   "$out" "M0 setup"
+  assert_contains "altitude -2: current marked" "$out" "▸ M1 core"
+  assert_not_contains "altitude -2: no tasks"   "$out" "P0M1T1"
+
+  out2="$(run "$d" milestone)"  # the label word is interchangeable
+  assert_contains "altitude label = -2"          "$out2" "▸ M1 core"
+
+  out="$(run "$d" -1)"        # every top-level entry, current marked
+  assert_contains "altitude -1: project rows"   "$out" "P0 foundations"
+  assert_contains "altitude -1: current marked" "$out" "▸ P0"
+  assert_contains "altitude -1: other project"  "$out" "P1 growth"
+
+  out="$(run "$d" -3)"        # the leaf level = the default view
+  assert_contains "altitude -3: task view"      "$out" "P0M1T1"
+  out="$(run "$d" task)"
+  assert_contains "altitude leaf word = -3"     "$out" "P0M1T1"
+
+  out="$(run "$d" all)"       # the whole tree
+  assert_contains "altitude all: full tree"     "$out" "P2 · Later"
+
+  out="$(run "$d" -9)"
+  assert_contains "altitude out of range"       "$out" "unknown selector"
+
+  out="$(run "$d" view -2; cat "$d/.git/projstatus-view")"
+  assert_contains "altitude view token stays live" "$out" "-2"
 fi
 
 # --- hierarchy config: explicit HIERARCHY key overrides auto-detect ----------

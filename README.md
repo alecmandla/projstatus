@@ -55,14 +55,23 @@ Run it inside any repo with the hierarchy:
 
 ```sh
 projstatus              # the current leaf (the pointer), once
-projstatus P0M1         # peek at any level: full tokens reach a leaf …
-projstatus P0           # … partial tokens show that level's overview
-projstatus ls           # the whole tree at a glance
-projstatus next         # plain-text orientation (see below)
-projstatus --watch      # the live, interactive pane
+projstatus P0M1         # peek at any node: full tokens reach a leaf …
+projstatus P0           # … partial tokens show that group's overview
+projstatus -2           # altitude view: the current point of development at
+projstatus milestone    #   level 2 — both spellings work; words match your
+                        #   repo's own labels (a milestone→phase repo answers
+                        #   to `projstatus phase`); the leaf is -<levels+1>
+projstatus all          # the whole tree at a glance (alias: ls)
+projstatus now          # plain-text orientation (see below)
+projstatus watch        # the live, interactive pane (aliases: --watch, -w)
 projstatus pane         # open the live pane in a Supacode split
 projstatus view <sel>   # retarget a running pane from another shell
+                        #   (also: view next / view prev step the pane)
 ```
+
+There are two ways to look at a repo: **pick a node** (`P0M1` — a specific place)
+or **pick an altitude** (`-2` / `milestone` — the current place, seen at that
+level, among its siblings). Altitude views follow the pointer as work moves.
 
 In the live pane, click to focus it, then press:
 
@@ -71,7 +80,8 @@ In the live pane, click to focus it, then press:
 | `n` / `p` | next / previous sibling of the current view |
 | `c` | jump to the live pointer |
 | `a` | whole-tree overview |
-| `g` | go to a specific one (type e.g. `P2` or `P0M1`, then Enter) |
+| `1`–`4` | altitude: view the current point at that level |
+| `g` | go to a specific one (type e.g. `P2`, `P0M1`, or `-2`, then Enter) |
 | `r` | refresh now |
 | `q` | quit |
 
@@ -79,13 +89,13 @@ When not focused, the pane just auto-refreshes (default every 4s) and follows yo
 work. Redraws are flicker-free (in-place, no screen clear). The pane's target is
 remembered in `.git/projstatus-view` (untracked).
 
-## `projstatus next` — orient a new session
+## `projstatus now` — orient a new session
 
 For humans and agents starting cold: one command that says where the project stands,
 as stable, grep-able plain text.
 
 ```
-$ projstatus next
+$ projstatus now
 pointer: P1M1  docs/tasks/project-1-core-loop/milestone-1-capture
 state: ready to start
 next-task: P1M1T7  Wire background auto-enrich trigger after capture

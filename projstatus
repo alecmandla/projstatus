@@ -14,20 +14,24 @@
 #
 # USAGE
 #   projstatus                 the current leaf (the pointer), once
-#   projstatus P0M1            peek at any level: full tokens reach a leaf …
-#   projstatus P2              … partial tokens show that level's overview
-#   projstatus ls              the whole tree at a glance
-#   projstatus next            plain-text orientation: the pointer + the first
+#   projstatus P0M1 | P0       peek at any node: full tokens reach a leaf,
+#                              partial tokens show that group's overview
+#   projstatus -2 | milestone  altitude view: the current point of development
+#                              at that level, among its siblings — level words
+#                              match your repo's own labels; -<n> counts from
+#                              the top (the leaf is -<levels+1>)
+#   projstatus all             the whole tree at a glance (alias: ls)
+#   projstatus now             plain-text orientation: the pointer + the first
 #                              unfinished task (stable, grep-able — made for
 #                              new sessions, scripts, and agents)
-#   projstatus prev            the leaf before the current view
-#   projstatus --watch         the live, interactive pane
+#   projstatus watch           the live, interactive pane (aliases: --watch, -w)
 #   projstatus pane            open the live pane in a Supacode split (if inside Supacode)
 #   projstatus view <sel>      retarget a running pane from another shell
+#                              (also: view next / view prev step the pane)
 #   projstatus help            this help
 #
 # In the live pane, click it to focus, then press:
-#   n next · p prev · c live pointer · a all · g go to · r refresh · q quit
+#   n next · p prev · c live pointer · a all · 1-4 altitude · g go to · r refresh · q quit
 #
 # ADAPTING IT — drop an optional ".projstatus" file at a repo's root to override
 # any of these (all have sensible auto-detected defaults):
@@ -221,6 +225,11 @@ kids() {  # child dirs of $1 at level $2
 }
 dir_level() { printf '%s' "${1#$TASKS_ROOT/}" | awk -F/ '{print NF}'; }
 path_seg()  { printf '%s' "${1#$TASKS_ROOT/}" | cut -d/ -f"$2"; }
+ancestor_at() {  # the level-$2 ancestor of dir $1
+  local out="$TASKS_ROOT" i=1
+  while [ "$i" -le "$2" ]; do out="$out/$(path_seg "$1" "$i")"; i=$((i+1)); done
+  printf '%s' "$out"
+}
 
 count_file() {
   local file="$1" hdr="$2" t dn
@@ -290,16 +299,41 @@ classify() {  # an existing dir → LEAF (leaf level) | GROUP (has children) | S
   else printf 'SUMMARY\t%s' "$d"; fi
 }
 
+level_sel() {  # altitude selector ("-2", "milestone", "task") → level 1..NLEV+1, or ""
+  local s="$1" i=1
+  case "$s" in
+    -[1-9])
+      s="${s#-}"
+      [ "$s" -le $((NLEV+1)) ] && printf '%s' "$s"
+      return ;;
+  esac
+  while [ "$i" -le "$NLEV" ]; do
+    [ "$s" = "$(lc "$(lbl "$i")")" ] && { printf '%s' "$i"; return; }
+    i=$((i+1))
+  done
+  [ "$s" = "$(lc "$TASK_LABEL")" ] && printf '%s' $((NLEV+1))
+}
+
 resolve() {
   local sel; sel="$(lc "$1")"
-  local d i l num rest nums
+  local d i l num rest nums k
   case "$sel" in
     ""|pointer)
       d="$(ptr_leaf)"
       [ -n "$d" ] && printf 'LEAF\t%s' "$d" || printf 'NONE\tno %s folders found under %s' "$(lc "$LEAF_LBL")" "$TASKS_ROOT"; return ;;
-    ls|list|--list|-l) printf 'LIST\t'; return ;;
+    ls|list|all) printf 'LIST\t'; return ;;
     next|prev) resolve_nav "$sel"; return ;;
   esac
+  # altitude selectors: the current point of development, viewed at level k
+  k="$(level_sel "$sel")"
+  if [ -n "$k" ]; then
+    if [ "$k" -eq 1 ]; then printf 'TOP\t%s' "$TASKS_ROOT"; return; fi
+    d="$(ptr_leaf)"
+    [ -z "$d" ] && { printf 'NONE\tno %s folders found under %s' "$(lc "$LEAF_LBL")" "$TASKS_ROOT"; return; }
+    if [ "$k" -gt "$NLEV" ]; then printf 'LEAF\t%s' "$d"
+    else printf 'GROUP\t%s' "$(ancestor_at "$d" $((k-1)))"; fi
+    return
+  fi
   # letter-number tokens, outermost first: L1n[L2n[…]] — full or partial depth
   rest="$sel"; i=0; nums=""
   while [ "$i" -lt "$NLEV" ] && [ -n "$rest" ]; do
@@ -360,14 +394,17 @@ _sel_to_dir() {
 }
 
 write_view() {
-  local sel="$1" r kind arg tok
+  local sel="$1" r kind arg tok k
   r="$(resolve "$sel")"; kind="${r%%	*}"; arg="${r#*	}"
   [ "$kind" = "NONE" ] && return 1
   case "$kind" in
     LEAF|GROUP|SUMMARY) tok="$(dir_token "$arg")" ;;
+    TOP)  tok="-1" ;;
     LIST) tok="ls" ;;
     *) tok="$sel" ;;
   esac
+  # altitude selectors stay live — the stored token re-anchors at the pointer each refresh
+  k="$(level_sel "$(lc "$sel")")"; [ -n "$k" ] && tok="-$k"
   [ "$(lc "$sel")" = "pointer" ] && tok="pointer"
   printf '%s\n' "$tok" > "$VIEW_FILE"
 }
@@ -422,9 +459,9 @@ nav_hint() {
   if [ "$PANE" = 1 ]; then
     local k="$CYN" d="$DIM" r="$RST"
     echo ""
-    echo "  ${d}keys${r}  ${k}n${r}${d} next  ${k}p${r}${d} prev  ${k}c${r}${d} live  ${k}a${r}${d} all  ${k}g${r}${d} go to  ${k}q${r}${d} quit${r}"
+    echo "  ${d}keys${r}  ${k}n${r}${d} next  ${k}p${r}${d} prev  ${k}c${r}${d} live  ${k}a${r}${d} all  ${k}1-$((NLEV+1))${r}${d} altitude  ${k}g${r}${d} go to  ${k}q${r}${d} quit${r}"
   else
-    printf '  %s↹ run:  projstatus <%s|%s2|prev>   ·   projstatus view <sel> moves the pane%s\n' "$DIM" "$(sel_example)" "$(ltr 1)" "$RST"
+    printf '  %s↹ run:  projstatus <%s|-2|all>   ·   projstatus view <sel> moves the pane%s\n' "$DIM" "$(sel_example)" "$RST"
   fi
 }
 
@@ -577,19 +614,33 @@ render_list() {
   printf '\n'; nav_hint
 }
 
+render_top() {  # altitude view -1: every top-level entry, current marked
+  local ptr d; ptr="$(ptr_leaf)"
+  while IFS= read -r d; do
+    [ -z "$d" ] && continue
+    group_row "$d" 1 22 8 "" "$ptr"
+  done < <(lvl_dirs 1)
+  render_inbox_line
+  footer_nav "-1" "$(dir_token "$ptr")"
+}
+
 render_dispatch() {
-  local sel="$1" r kind arg
+  local sel="$1" r kind arg k glbl
   r="$(resolve "$sel")"; kind="${r%%	*}"; arg="${r#*	}"
+  k="$(level_sel "$(lc "$sel")")"   # altitude views headline the level being listed
   case "$kind" in
     LEAF)    header "status"; render_leaf "$arg" ;;
-    GROUP)   header "$(lc "$(lbl "$(dir_level "$arg")")")"; render_group "$arg" ;;
+    GROUP)
+      if [ -n "$k" ]; then glbl="$(lc "$(lbl "$k")")s"; else glbl="$(lc "$(lbl "$(dir_level "$arg")")")"; fi
+      header "$glbl"; render_group "$arg" ;;
     SUMMARY) header "$(lc "$(lbl "$(dir_level "$arg")")")"; render_summary "$arg" ;;
+    TOP)     header "$(lc "$(lbl 1)")s"; render_top ;;
     LIST)    header "overview"; render_list ;;
     *)       header "status"; printf '  %s⚠ %s%s\n' "$YEL" "$arg" "$RST"; printf '  %stry: projstatus ls%s\n' "$DIM" "$RST" ;;
   esac
 }
 
-# --- `projstatus next`: plain-text orientation for new sessions/agents -------
+# --- `projstatus now`: plain-text orientation for new sessions/agents --------
 first_open_task() {  # "ID: Title" of the first task in $1 whose status isn't [x]
   awk -v hdr="$TASK_RE" '
     $0 ~ hdr { h=$0; sub(/^#+[ ]+/,"",h); cand=h; next }
@@ -598,7 +649,7 @@ first_open_task() {  # "ID: Title" of the first task in $1 whose status isn't [x
   ' "$1" 2>/dev/null
 }
 
-cmd_next() {
+cmd_now() {
   local d tok task file c
   d="$(ptr_leaf)"
   [ -z "$d" ] && { printf 'pointer: none (no %s folders under %s)\n' "$(lc "$LEAF_LBL")" "$TASKS_ROOT"; exit 1; }
@@ -631,6 +682,7 @@ handle_key() {
     p|P)     write_view prev    || true ;;
     c|C|.)   write_view pointer || true ;;
     a|A)     write_view ls      || true ;;
+    [1-9])   write_view "-$1"   || true ;;
     r|R)     : ;;
     g|G)     return 3 ;;
     q|Q)     return 2 ;;
@@ -646,7 +698,11 @@ usage() {
 # =============================== main ========================================
 case "${1:-}" in
   help|--help|-h) usage ;;
-  next) cmd_next ;;   # bare `next` orients; `view next` and the pane's n key still navigate
+  now) cmd_now ;;
+  next|prev)
+    printf '%s moves the live pane — use:  projstatus view %s   (or press n/p in the pane)\n' "$1" "$1"
+    printf 'for plain-text orientation, use:  projstatus now\n'
+    exit 1 ;;
   view)
     sel="${2:-pointer}"
     if write_view "$sel"; then
@@ -665,7 +721,7 @@ case "${1:-}" in
       printf 'Not inside Supacode. In a terminal split/pane, run:  projstatus --watch\n'
     fi
     ;;
-  --watch|-w)
+  watch|--watch|-w)
     PANE=1; interval="$REFRESH"
     do_render() {
       PROJSTATUS_COLS=$(tput cols 2>/dev/null || echo 56)
@@ -683,7 +739,7 @@ case "${1:-}" in
           handle_key "$key"; rc=$?
           if [ "$rc" = 2 ]; then clear_screen; printf '  projstatus closed.  restart:  projstatus --watch\n'; exit 0; fi
           if [ "$rc" = 3 ]; then
-            printf '\n  %sgo to%s (e.g. %s2, %s, pointer) — then Enter: ' "$BOLD" "$RST" "$(ltr 1)" "$(sel_example)"
+            printf '\n  %sgo to%s (e.g. %s2, %s, -2, pointer) — then Enter: ' "$BOLD" "$RST" "$(ltr 1)" "$(sel_example)"
             IFS= read -r sel || sel=""
             [ -n "$sel" ] && { write_view "$sel" || true; }
           fi
