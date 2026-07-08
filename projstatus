@@ -387,11 +387,16 @@ render_items() {
       t=$0; sub(/.*:\*\*[ ]*/,"",t); sub(/[ `].*/,"",t); tag[cur]=t
     }
     cur!="" && seen[cur]==0 && $0 ~ /\*\*Status:\*\*/ { seen[cur]=1; xd[cur]=($0 ~ /\[x\]/) }
+    # sub-issues: checklist lines inside the section (the Status line is "- **…", not "- [")
+    cur!="" && $0 ~ /^[[:space:]]*- \[[ xX]\]/ {
+      st[cur]++; if ($0 ~ /^[[:space:]]*- \[[xX]\]/) sd[cur]++
+    }
     END {
-      for(i=1;i<=n;i++){ id=ord[i]; tg="";
+      for(i=1;i<=n;i++){ id=ord[i]; tg=""; sfx=""; w=maxw;
         if(!xd[id] && tag[id]!="") tg=tcol(tag[id]) "[" substr(tag[id],1,4) "] " r;
+        if(!xd[id] && st[id]>0){ p=sprintf("%d/%d", sd[id]+0, st[id]); w-=length(p)+1; sfx=" " d p r }
         if(xd[id]) printf "  %s●%s %-*s %s%s%s\n", g,r, idw, id, g, trunc(title[id],maxw), r;
-        else       printf "  %s○%s %-*s %s%s\n",   d,r, idw, id, tg, trunc(title[id],maxw);
+        else       printf "  %s○%s %-*s %s%s%s\n", d,r, idw, id, tg, trunc(title[id],w), sfx;
       }
     }' "$file"
 }
