@@ -26,6 +26,10 @@ projstatus turns those files into a live dashboard: what's done, what's open,
 what's next. Nothing to sync, no service, no database — the markdown *is* the
 source of truth.
 
+Companion project: [ai-layout](https://github.com/alecmandla/ai-layout) builds
+an AI coding workspace in your terminal — agent on the left, `projstatus
+--watch` in the top-right pane — with one command.
+
 ## Quick start
 
 ```sh
