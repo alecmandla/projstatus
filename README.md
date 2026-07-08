@@ -4,21 +4,7 @@ A live "where am I" dashboard for any repo that keeps its plan in markdown files
 One bash script, zero dependencies beyond the tools already on your machine
 (bash/awk/sed/grep/git), runs on the stock macOS shell.
 
-```
-  MYPROJECT ▸ status                          14:09:29
-  ────────────────────────────────────────────────────
-  Project 0 · Foundations
-  Milestone 2 — data foundation
-  ◆ current pointer — ready to start
-
-  Tasks                                        1/7 done
-  ────────────────────────────────────────────────────
-  ● P0M2T0  Install and configure expo-sqlite
-  ○ P0M2T1  Define the schema + migrations        2/5
-  …
-  Gaps                                         4/5 done
-  ○ GAP-P0M2-3  [High] Add an .easignore
-```
+<img src="assets/screenshot.png" alt="projstatus dashboard — tasks, sub-issue counts, gaps, and a progress bar for the current milestone" width="600">
 
 The idea: your plan is just folders and markdown — readable in any editor,
 reviewable in pull requests, and easy for AI coding agents to read and update.
