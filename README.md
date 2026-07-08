@@ -12,6 +12,12 @@ projstatus turns those files into a live dashboard: what's done, what's open,
 what's next. Nothing to sync, no service, no database — the markdown *is* the
 source of truth.
 
+Here's the tour — `projstatus` to orient, `projstatus now` for the plain-text
+version, then `projstatus watch` following along live as tasks get checked off
+in the markdown:
+
+<img src="assets/demo.gif" alt="projstatus demo — the once-mode dashboard, projstatus now, and the live pane updating as TASKS.md changes" width="700">
+
 Companion project: [ai-layout](https://github.com/alecmandla/ai-layout) builds
 an AI coding workspace in your terminal — agent on the left, `projstatus
 --watch` in the top-right pane — with one command.
