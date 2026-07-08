@@ -170,6 +170,28 @@ if want depth4; then
   assert_contains "depth4 missing mid level"         "$out" "no project 9 under I0"
 fi
 
+# --- `projstatus next`: the plain-text orientation command -------------------
+if want nextcmd; then
+  d="$(fixture_dir depth3)"
+
+  out="$(run "$d" next)"
+  assert_contains "next: pointer token+path" "$out" "pointer: P0M1  docs/tasks/project-0-foundations/milestone-1-core"
+  assert_contains "next: state line"         "$out" "state: in progress"
+  assert_contains "next: first open task"    "$out" "next-task: P0M1T1  Test the core loop"
+  assert_contains "next: file line"          "$out" "file: docs/tasks/project-0-foundations/milestone-1-core/TASKS.md"
+
+  # a pointer parked on a finished leaf hops to the first open task elsewhere
+  sed -i '' 's/`milestone-1-core`/`milestone-0-setup`/' "$d/AGENTS.md"
+  out="$(run "$d" next)"
+  assert_contains "next: complete-leaf note" "$out" "note: P0M0 is complete"
+  assert_contains "next: hopped task"        "$out" "next-task: P0M1T1"
+
+  # bare `next` no longer navigates, but `view next` still does
+  run "$d" view P0M0 >/dev/null
+  out="$(run "$d" view next; cat "$d/.git/projstatus-view")"
+  assert_contains "next: view next still navigates" "$out" "P0M1"
+fi
+
 # --- hierarchy config: explicit HIERARCHY key overrides auto-detect ----------
 if want hierarchy; then
   d="$(fixture_dir depth2)"

@@ -17,6 +17,9 @@
 #   projstatus P0M1            peek at any level: full tokens reach a leaf …
 #   projstatus P2              … partial tokens show that level's overview
 #   projstatus ls              the whole tree at a glance
+#   projstatus next            plain-text orientation: the pointer + the first
+#                              unfinished task (stable, grep-able — made for
+#                              new sessions, scripts, and agents)
 #   projstatus prev            the leaf before the current view
 #   projstatus --watch         the live, interactive pane
 #   projstatus pane            open the live pane in a Supacode split (if inside Supacode)
@@ -248,7 +251,7 @@ first_unfinished_leaf() {
 }
 pointer_state() {
   local line; line=$(grep -m1 "$POINTER_PATTERN" "$POINTER_FILE" 2>/dev/null)
-  if [ -n "$line" ]; then printf '%s' "$line" | sed -E 's/.*—[[:space:]]*//; s/[*.[:space:]]*$//'
+  if [ -n "$line" ]; then printf '%s' "$line" | sed -E 's/.*—[[:space:]]*//; s/\*\*.*$//; s/[*.[:space:]]*$//'
   else printf 'you are here (first unfinished %s)' "$(lc "$LEAF_LBL")"; fi
 }
 slug_dir() { find "$TASKS_ROOT" -maxdepth "$NLEV" -type d -name "$1" 2>/dev/null | head -1; }
@@ -581,6 +584,39 @@ render_dispatch() {
   esac
 }
 
+# --- `projstatus next`: plain-text orientation for new sessions/agents -------
+first_open_task() {  # "ID: Title" of the first task in $1 whose status isn't [x]
+  awk -v hdr="$TASK_RE" '
+    $0 ~ hdr { h=$0; sub(/^#+[ ]+/,"",h); cand=h; next }
+    /^## /   { cand="" }
+    cand!="" && /\*\*Status:\*\*/ { if ($0 !~ /\[x\]/) { print cand; exit } cand="" }
+  ' "$1" 2>/dev/null
+}
+
+cmd_next() {
+  local d tok task file c
+  d="$(ptr_leaf)"
+  [ -z "$d" ] && { printf 'pointer: none (no %s folders under %s)\n' "$(lc "$LEAF_LBL")" "$TASKS_ROOT"; exit 1; }
+  tok="$(dir_token "$d")"
+  printf 'pointer: %s  %s\n' "$tok" "$d"
+  printf 'state: %s\n' "$(pointer_state)"
+  file="$d/$TASKS_FILE"
+  task="$(first_open_task "$file")"
+  if [ -z "$task" ]; then
+    while IFS= read -r c; do
+      task="$(first_open_task "$c/$TASKS_FILE")"
+      [ -n "$task" ] && { file="$c/$TASKS_FILE"; break; }
+    done < <(leaf_dirs)
+    [ -n "$task" ] && printf 'note: %s is complete — the next open task is in %s\n' "$tok" "$(dir_token "$(dirname "$file")")"
+  fi
+  if [ -n "$task" ]; then
+    printf 'next-task: %s  %s\n' "${task%%:*}" "$(printf '%s' "${task#*:}" | sed 's/^ *//')"
+    printf 'file: %s\n' "$file"
+  else
+    printf 'next-task: none (all tasks complete)\n'
+  fi
+}
+
 current_view() { local v; v="$(cat "$VIEW_FILE" 2>/dev/null)"; [ -z "$v" ] && v="pointer"; printf '%s' "$v"; }
 clear_screen() { tput clear 2>/dev/null || printf '\033[2J\033[3J\033[H'; }
 
@@ -605,6 +641,7 @@ usage() {
 # =============================== main ========================================
 case "${1:-}" in
   help|--help|-h) usage ;;
+  next) cmd_next ;;   # bare `next` orients; `view next` and the pane's n key still navigate
   view)
     sel="${2:-pointer}"
     if write_view "$sel"; then
