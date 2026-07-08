@@ -5,19 +5,36 @@
 # Header label (default: the repo's folder name, title-cased)
 # PROJECT_NAME="My Project"
 
-# Where project-*/milestone-* folders live (default: docs/tasks | tasks | planning/tasks)
+# Where the hierarchy's folders live (default: docs/tasks | tasks | planning/tasks)
 # TASKS_ROOT="docs/tasks"
 
-# The pointer line: a file containing `... Current pointer: ... \`milestone-slug\` ...`
-# (default file AGENTS.md, default pattern "Current pointer:").
-# Omit entirely to let "current" auto-resolve to the first unfinished milestone.
+# The folder levels, outermost first — 1 to 4 of them, Linear-style
+# (Initiative > Project > Milestone above a TASKS.md leaf). Each level is
+# <folder-prefix>[:<Label>[:<Letter>]]; label and letter derive from the prefix
+# when omitted. An optional @<file>[:<Label>[:<Letter>]] entry names the leaf
+# (default @TASKS.md:Task:T). The default is auto-detected from the folder tree,
+# so set this only when detection guesses wrong (e.g. clashing letters).
+# HIERARCHY="initiative-:Initiative:I project-:Project:P milestone-:Milestone:M"
+#
+# A milestone→phase repo, with tasks like `## M8P1T3: …`:
+# HIERARCHY="milestone-:Milestone:M phase-:Phase:P"
+#
+# (The pre-HIERARCHY two-level keys OUTER_PREFIX/INNER_PREFIX, OUTER_LABEL/
+# INNER_LABEL, OUTER_LETTER/INNER_LETTER still work and imply two levels.)
+
+# The pointer line: a file containing `... Current pointer: ... \`folder-slug\` ...`
+# (default file AGENTS.md, default pattern "Current pointer:"). The slug may name
+# any level; a group pointer descends to its first unfinished leaf.
+# Omit entirely to let "current" auto-resolve to the first unfinished leaf.
 # POINTER_FILE="AGENTS.md"
 # POINTER_PATTERN="Current pointer:"
 
 # Raw issue inbox file (default: docs/ISSUES_INBOX.md or ISSUES_INBOX.md)
 # INBOX="docs/ISSUES_INBOX.md"
 
-# Header regexes, if your IDs differ from the P<n>M<m>T<k> / GAP- / ISS- convention
+# Header regexes. TASK_RE's default is derived from the hierarchy's letters
+# (e.g. ^## P[0-9]+M[0-9]+T[0-9]+: for project-/milestone-), so it rarely
+# needs setting by hand.
 # TASK_RE='^## P[0-9]+M[0-9]+T[0-9]+:'
 # GAP_RE='^### GAP-'
 # ISS_RE='^### ISS-'
